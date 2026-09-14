@@ -1,0 +1,29 @@
+{
+  "name": "nucleagent-deliverables-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "test:unit": "node --test --experimental-test-coverage --test-coverage-include=src/addons/deliverables/api/contracts.ts --test-coverage-include=src/addons/deliverables/api/uploadProtocol.ts --test-coverage-include=src/addons/deliverables/composables/embeddedSessionPolicy.ts --test-coverage-include=src/i18n/localePolicy.ts --test-coverage-include=src/addons/deliverables/utils/docxPreviewPolicy.ts --test-coverage-include=src/addons/deliverables/utils/pageContext.ts --test-coverage-include=src/addons/deliverables/utils/previewPolicy.ts --test-coverage-lines=80 --test-coverage-functions=80 --test-coverage-branches=80 tests/*.test.ts",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "docx-preview": "^0.3.7",
+    "dompurify": "^3.4.13",
+    "marked": "^18.0.0",
+    "vue": "^3.5.0",
+    "vue-i18n": "^9.14.0",
+    "vue-router": "^4.6.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@vitejs/plugin-vue": "5.2.4",
+    "typescript": "^5.5.0",
+    "vite": "6.4.3",
+    "vue-tsc": "^2.1.0"
+  },
+  "packageManager": "pnpm@10.4.1"
+}
