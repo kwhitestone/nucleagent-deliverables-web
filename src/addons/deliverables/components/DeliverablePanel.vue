@@ -8,7 +8,7 @@ import {
   listDeliverables,
 } from "@/addons/deliverables/api/client";
 import type { Deliverable } from "@/addons/deliverables/api/contracts";
-import { SESSION_CHANGE_EVENT } from "@/addons/deliverables/composables/embeddedSession";
+import { isCancelled, useSessionLifetime } from "@/addons/deliverables/composables/useSessionLifetime";
 import { assertSafePreviewUrl, previewKind, shortFileType } from "@/addons/deliverables/utils/previewPolicy";
 import PreviewDialog from "./PreviewDialog.vue";
 import UploadDialog from "./UploadDialog.vue";
@@ -35,7 +35,9 @@ const previewItem = ref<Deliverable | null>(null);
 const notice = ref("");
 let searchTimer: number | null = null;
 let autoRefreshTimer: number | null = null;
+let noticeTimer: number | null = null;
 let requestVersion = 0;
+const lifetime = useSessionLifetime(onSessionChange);
 
 const scopedToConversation = computed(() => Boolean(props.conversationId && props.conversationId > 0));
 const hasFilters = computed(() => Boolean(query.value || (!scopedToConversation.value && conversationId.value) || kind.value || dateFrom.value || dateTo.value));
@@ -55,22 +57,23 @@ function listParams(beforeId?: number) {
 }
 
 async function load(append = false): Promise<void> {
+  const owner = lifetime.capture();
   const version = ++requestVersion;
   if (append) loadingMore.value = true;
   else loading.value = true;
   error.value = "";
   try {
     const page = await listDeliverables(listParams(append ? nextBeforeId.value : undefined));
-    if (version !== requestVersion) return;
+    if (version !== requestVersion || !lifetime.isCurrent(owner)) return;
     items.value = append ? [...items.value, ...page.items] : [...page.items];
     hasMore.value = page.hasMore;
     nextBeforeId.value = page.nextBeforeId;
   } catch (reason) {
-    if (version !== requestVersion) return;
-    error.value = reason instanceof Error ? reason.message : t("loadFailed");
+    if (version !== requestVersion || !lifetime.isCurrent(owner) || isCancelled(reason)) return;
+    error.value = t("loadFailed");
     if (!append) items.value = [];
   } finally {
-    if (version === requestVersion) {
+    if (version === requestVersion && lifetime.isCurrent(owner)) {
       loading.value = false;
       loadingMore.value = false;
     }
@@ -82,19 +85,24 @@ function scheduleLoad(): void {
   searchTimer = window.setTimeout(() => { void load(); }, 280);
 }
 
-function clearFilters(): void {
+function resetFilters(): void {
   query.value = "";
   conversationId.value = scopedToConversation.value ? String(props.conversationId) : "";
   kind.value = "";
   dateFrom.value = "";
   dateTo.value = "";
+}
+
+function clearFilters(): void {
+  resetFilters();
   void load();
 }
 
 function handleSaved(deliverable: Deliverable): void {
   items.value = [deliverable, ...items.value.filter((item) => item.id !== deliverable.id)];
   notice.value = deliverable.source === "app-link" ? t("linkCreated") : deliverable.source === "import" ? t("imported") : t("uploaded");
-  window.setTimeout(() => { notice.value = ""; }, 2600);
+  if (noticeTimer) window.clearTimeout(noticeTimer);
+  noticeTimer = window.setTimeout(() => { notice.value = ""; }, 2600);
 }
 
 function showPreview(item: Deliverable): void {
@@ -102,18 +110,21 @@ function showPreview(item: Deliverable): void {
 }
 
 async function download(item: Deliverable): Promise<void> {
+  const owner = lifetime.capture();
   try {
     const target = item.source === "app-link" ? assertSafePreviewUrl(item.appUrl || "") : await getDownloadUrl(item.id);
+    lifetime.assertCurrent(owner);
     if (!target) throw new Error(t("downloadUnavailable"));
     window.open(target, "_blank", "noopener,noreferrer");
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : t("downloadFailed");
+    if (lifetime.isCurrent(owner) && !isCancelled(reason)) error.value = t("downloadFailed");
   }
 }
 
 async function clone(item: Deliverable): Promise<void> {
+  const owner = lifetime.capture();
   const answer = window.prompt(t("clonePrompt"));
-  if (answer === null) return;
+  if (answer === null || !lifetime.isCurrent(owner)) return;
   const targetConversationId = Number(answer.trim());
   if (!Number.isSafeInteger(targetConversationId) || targetConversationId <= 0) {
     error.value = t("invalidConversation");
@@ -121,21 +132,24 @@ async function clone(item: Deliverable): Promise<void> {
   }
   try {
     const copied = await cloneDeliverable(item, targetConversationId);
+    lifetime.assertCurrent(owner);
     items.value = [copied, ...items.value.filter((candidate) => candidate.id !== copied.id)];
     notice.value = t("copied");
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : t("cloneFailed");
+    if (lifetime.isCurrent(owner) && !isCancelled(reason)) error.value = t("cloneFailed");
   }
 }
 
 async function remove(item: Deliverable): Promise<void> {
-  if (!window.confirm(t("confirmDelete"))) return;
+  const owner = lifetime.capture();
+  if (!window.confirm(t("confirmDelete")) || !lifetime.isCurrent(owner)) return;
   try {
     await deleteDeliverable(item.id);
+    lifetime.assertCurrent(owner);
     items.value = items.value.filter((candidate) => candidate.id !== item.id);
     notice.value = t("deleted");
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : t("deleteFailed");
+    if (lifetime.isCurrent(owner) && !isCancelled(reason)) error.value = t("deleteFailed");
   }
 }
 
@@ -159,6 +173,17 @@ function sourceLabel(source: Deliverable["source"]): string {
 }
 
 function onSessionChange(): void {
+  if (searchTimer) window.clearTimeout(searchTimer);
+  if (noticeTimer) window.clearTimeout(noticeTimer);
+  previewItem.value = null;
+  uploadMode.value = null;
+  items.value = [];
+  notice.value = "";
+  error.value = "";
+  hasMore.value = false;
+  nextBeforeId.value = 0;
+  loadingMore.value = false;
+  resetFilters();
   void load();
 }
 
@@ -167,7 +192,6 @@ function refreshWhenVisible(): void {
 }
 
 onMounted(() => {
-  window.addEventListener(SESSION_CHANGE_EVENT, onSessionChange);
   window.addEventListener("focus", refreshWhenVisible);
   document.addEventListener("visibilitychange", refreshWhenVisible);
   if (props.embedded) autoRefreshTimer = window.setInterval(refreshWhenVisible, 15_000);
@@ -177,7 +201,7 @@ onBeforeUnmount(() => {
   requestVersion += 1;
   if (searchTimer) window.clearTimeout(searchTimer);
   if (autoRefreshTimer) window.clearInterval(autoRefreshTimer);
-  window.removeEventListener(SESSION_CHANGE_EVENT, onSessionChange);
+  if (noticeTimer) window.clearTimeout(noticeTimer);
   window.removeEventListener("focus", refreshWhenVisible);
   document.removeEventListener("visibilitychange", refreshWhenVisible);
 });

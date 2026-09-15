@@ -9,8 +9,11 @@ import {
 } from "./contracts";
 import { buildCompletePayload, buildPresignPayload, type FileMetadata } from "./uploadProtocol";
 import { assertSafePreviewUrl } from "@/addons/deliverables/utils/previewPolicy";
-import { getAccessToken } from "@/addons/deliverables/utils/token";
-import { handleEmbeddedUnauthorized } from "@/addons/deliverables/composables/embeddedSession";
+import {
+  assertCurrentSessionRequest,
+  captureSessionRequest,
+  handleEmbeddedUnauthorized,
+} from "@/addons/deliverables/composables/embeddedSession";
 import { translate } from "@/i18n";
 
 const API_BASE = (import.meta.env.VITE_DELIVERABLES_API_URL ?? "").trim().replace(/\/$/, "");
@@ -28,15 +31,27 @@ export interface ListParams {
 }
 
 async function request<T>(path: string, init: RequestInit = {}, allowEmptyData = false): Promise<T> {
-  const token = getAccessToken();
-  const headers = new Headers(init.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const response = await fetch(`${ROOT}${path}`, { ...init, headers });
-  if (response.status === 401) {
-    handleEmbeddedUnauthorized(token ? "rejected" : "missing");
+  const owner = captureSessionRequest();
+  if (!owner.token) {
+    handleEmbeddedUnauthorized("missing", owner);
+    throw new DOMException("Authentication required", "AbortError");
   }
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${owner.token}`);
+  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const signal = init.signal ? AbortSignal.any([init.signal, owner.signal]) : owner.signal;
+  let response: Response;
+  try {
+    response = await fetch(`${ROOT}${path}`, { ...init, headers, signal });
+  } catch (error) {
+    assertCurrentSessionRequest(owner);
+    throw error;
+  }
+  assertCurrentSessionRequest(owner);
   const body = await response.json().catch(() => null) as Envelope<T> | null;
+  // Body parsing can finish after a trusted session change, even after cancellation.
+  assertCurrentSessionRequest(owner);
+  if (response.status === 401) handleEmbeddedUnauthorized("rejected", owner);
   if (!response.ok) throw new Error(body?.message?.trim() || translate("requestFailed", { status: response.status }));
   if (!body) throw new Error(translate("invalidResponse"));
   if (allowEmptyData) {
@@ -107,37 +122,79 @@ export function uploadBytes(
   file: File,
   credential: UploadCredential["upload"],
   onProgress?: (loaded: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
+  const owner = captureSessionRequest();
+  const uploadSignal = signal ? AbortSignal.any([signal, owner.signal]) : owner.signal;
   return new Promise((resolve, reject) => {
-    const useForm = Boolean(credential.fileField || Object.keys(credential.formFields ?? {}).length);
-    let body: XMLHttpRequestBodyInit = file;
-    if (useForm) {
-      const form = new FormData();
-      for (const [key, value] of Object.entries(credential.formFields ?? {})) form.append(key, value);
-      form.append(credential.fileField || "file", file);
-      body = form;
+    const cancelled = () => new DOMException("Upload cancelled", "AbortError");
+    if (uploadSignal.aborted) {
+      reject(cancelled());
+      return;
     }
     const xhr = new XMLHttpRequest();
-    xhr.open(credential.method || "PUT", assertSafePreviewUrl(credential.uploadUrl), true);
-    for (const [key, value] of Object.entries(credential.headers ?? {})) xhr.setRequestHeader(key, value);
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) onProgress?.(event.loaded, event.total);
+    let settled = false;
+    const finish = (error?: unknown, value = "") => {
+      if (settled) return;
+      settled = true;
+      uploadSignal.removeEventListener("abort", abort);
+      xhr.upload.onprogress = null;
+      xhr.onload = xhr.onerror = xhr.ontimeout = xhr.onabort = null;
+      if (error !== undefined) reject(error);
+      else resolve(value);
     };
-    xhr.onerror = () => reject(new Error(translate("uploadNetworkFailed")));
-    xhr.ontimeout = () => reject(new Error(translate("uploadTimeout")));
-    xhr.onload = () => {
-      if (xhr.status < 200 || xhr.status >= 300) {
-        reject(new Error(translate("uploadFailedStatus", { status: xhr.status })));
-        return;
-      }
+    const abort = () => {
+      if (settled) return;
+      // Settle and detach before abort(), which can synchronously emit events.
+      finish(cancelled());
+      xhr.abort();
+    };
+    const isCurrent = () => {
+      if (settled) return false;
       try {
-        const data = JSON.parse(xhr.responseText || "{}") as { dentry_id?: string; refId?: string };
-        resolve(data.refId ?? data.dentry_id ?? "");
+        assertCurrentSessionRequest(owner);
+        if (!uploadSignal.aborted) return true;
       } catch {
-        resolve("");
+        // A stored credential can also be replaced without a session event.
       }
+      abort();
+      return false;
     };
-    xhr.send(body);
+    try {
+      const useForm = Boolean(credential.fileField || Object.keys(credential.formFields ?? {}).length);
+      let body: XMLHttpRequestBodyInit = file;
+      if (useForm) {
+        const form = new FormData();
+        for (const [key, value] of Object.entries(credential.formFields ?? {})) form.append(key, value);
+        form.append(credential.fileField || "file", file);
+        body = form;
+      }
+      xhr.open(credential.method || "PUT", assertSafePreviewUrl(credential.uploadUrl), true);
+      for (const [key, value] of Object.entries(credential.headers ?? {})) xhr.setRequestHeader(key, value);
+      xhr.upload.onprogress = (event) => {
+        if (isCurrent() && event.lengthComputable) onProgress?.(event.loaded, event.total);
+      };
+      xhr.onerror = () => { if (isCurrent()) finish(new Error(translate("uploadNetworkFailed"))); };
+      xhr.ontimeout = () => { if (isCurrent()) finish(new Error(translate("uploadTimeout"))); };
+      xhr.onabort = () => finish(cancelled());
+      xhr.onload = () => {
+        if (!isCurrent()) return;
+        if (xhr.status < 200 || xhr.status >= 300) {
+          finish(new Error(translate("uploadFailedStatus", { status: xhr.status })));
+          return;
+        }
+        try {
+          const data = JSON.parse(xhr.responseText || "{}") as { dentry_id?: string; refId?: string };
+          finish(undefined, data.refId ?? data.dentry_id ?? "");
+        } catch {
+          finish();
+        }
+      };
+      uploadSignal.addEventListener("abort", abort, { once: true });
+      if (isCurrent()) xhr.send(body);
+    } catch (error) {
+      finish(error);
+    }
   });
 }
 

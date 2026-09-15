@@ -5,6 +5,7 @@ import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getDownloadUrl } from "@/addons/deliverables/api/client";
 import type { Deliverable } from "@/addons/deliverables/api/contracts";
+import { isCancelled, useSessionLifetime, type SessionOperation } from "@/addons/deliverables/composables/useSessionLifetime";
 import { renderSanitizedDocx } from "@/addons/deliverables/utils/docxPreviewPolicy";
 import { assertSafePreviewUrl, previewKind, type PreviewKind } from "@/addons/deliverables/utils/previewPolicy";
 
@@ -20,56 +21,68 @@ const text = ref("");
 const markdown = ref("");
 const sheetRows = ref<string[][]>([]);
 const docxHost = ref<HTMLElement | null>(null);
-let controller: AbortController | null = null;
-let workbookWorker: Worker | null = null;
+const active = ref(false);
+const lifetime = useSessionLifetime(close);
 
 function reset(): void {
-  controller?.abort();
-  controller = null;
-  workbookWorker?.terminate();
-  workbookWorker = null;
+  lifetime.invalidate();
+  active.value = false;
   loading.value = false;
   error.value = "";
   url.value = "";
+  kind.value = "unsupported";
   text.value = "";
   markdown.value = "";
   sheetRows.value = [];
   if (docxHost.value) docxHost.value.replaceChildren();
 }
 
-function parseWorkbook(buffer: ArrayBuffer): Promise<string[][]> {
+function parseWorkbook(buffer: ArrayBuffer, owner: SessionOperation): Promise<string[][]> {
+  lifetime.assertCurrent(owner);
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("../workers/xlsxPreview.worker.ts", import.meta.url), { type: "module" });
-    workbookWorker = worker;
-    const timeout = window.setTimeout(() => {
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      owner.signal.removeEventListener("abort", abort);
+      worker.onmessage = null;
+      worker.onerror = null;
       worker.terminate();
-      if (workbookWorker === worker) workbookWorker = null;
+    };
+    const abort = () => {
+      cleanup();
+      reject(new DOMException("Preview closed", "AbortError"));
+    };
+    const timeout = window.setTimeout(() => {
+      cleanup();
       reject(new Error(t("workbookParseTimeout")));
     }, 8000);
+    owner.signal.addEventListener("abort", abort, { once: true });
     worker.onmessage = (event: MessageEvent<{ rows?: string[][]; errorKey?: string }>) => {
-      window.clearTimeout(timeout);
-      worker.terminate();
-      if (workbookWorker === worker) workbookWorker = null;
+      cleanup();
       if (event.data.errorKey) reject(new Error(t(event.data.errorKey)));
       else resolve(event.data.rows ?? []);
     };
     worker.onerror = () => {
-      window.clearTimeout(timeout);
-      worker.terminate();
-      if (workbookWorker === worker) workbookWorker = null;
+      cleanup();
       reject(new Error(t("workbookParseFailed")));
     };
-    worker.postMessage(buffer, [buffer]);
+    try {
+      worker.postMessage(buffer, [buffer]);
+    } catch (reason) {
+      cleanup();
+      reject(reason);
+    }
   });
 }
 
-async function fetchLimitedText(downloadUrl: string, maxBytes = 10 * 1024 * 1024): Promise<string> {
-  controller = new AbortController();
-  const response = await fetch(downloadUrl, { signal: controller.signal });
+async function fetchLimitedText(downloadUrl: string, owner: SessionOperation, maxBytes = 10 * 1024 * 1024): Promise<string> {
+  const response = await fetch(downloadUrl, { signal: owner.signal });
+  lifetime.assertCurrent(owner);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const declared = Number(response.headers.get("content-length") || 0);
   if (declared > maxBytes) throw new Error(t("previewTooLarge"));
   const blob = await response.blob();
+  lifetime.assertCurrent(owner);
   if (blob.size > maxBytes) throw new Error(t("previewTooLarge"));
   return blob.text();
 }
@@ -78,6 +91,8 @@ async function load(): Promise<void> {
   reset();
   const item = props.deliverable;
   if (!props.open || !item) return;
+  const owner = lifetime.capture();
+  active.value = true;
   loading.value = true;
   try {
     kind.value = item.source === "app-link" ? "unsupported" : previewKind(item.mimeType, item.name);
@@ -85,40 +100,63 @@ async function load(): Promise<void> {
       url.value = assertSafePreviewUrl(item.appUrl || "");
       return;
     }
-    url.value = await getDownloadUrl(item.id);
-    if (kind.value === "text") text.value = await fetchLimitedText(url.value);
+    const downloadUrl = await getDownloadUrl(item.id);
+    lifetime.assertCurrent(owner);
+    url.value = downloadUrl;
+    if (kind.value === "text") {
+      const content = await fetchLimitedText(downloadUrl, owner);
+      lifetime.assertCurrent(owner);
+      text.value = content;
+    }
     if (kind.value === "markdown") {
-      const source = await fetchLimitedText(url.value);
-      markdown.value = DOMPurify.sanitize(await marked.parse(source));
+      const source = await fetchLimitedText(downloadUrl, owner);
+      lifetime.assertCurrent(owner);
+      const html = await marked.parse(source);
+      lifetime.assertCurrent(owner);
+      markdown.value = DOMPurify.sanitize(html);
     }
     if (kind.value === "docx") {
-      const response = await fetch(url.value);
+      const response = await fetch(downloadUrl, { signal: owner.signal });
+      lifetime.assertCurrent(owner);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const buffer = await response.arrayBuffer();
+      lifetime.assertCurrent(owner);
       if (buffer.byteLength > 20 * 1024 * 1024) throw new Error(t("previewTooLarge"));
       loading.value = false;
       await nextTick();
+      lifetime.assertCurrent(owner);
       const { renderAsync } = await import("docx-preview");
-      if (docxHost.value) {
-        await renderSanitizedDocx(buffer, docxHost.value, renderAsync, (html) => DOMPurify.sanitize(html, {
+      lifetime.assertCurrent(owner);
+      const host = docxHost.value;
+      if (host) {
+        // The renderer may finish after logout; only commit to the live host
+        // once the session and preview lifetime have been checked again.
+        const staged = host.ownerDocument.createElement("div");
+        await renderSanitizedDocx(buffer, staged, renderAsync, (html) => DOMPurify.sanitize(html, {
           FORBID_TAGS: ["script", "iframe", "object", "embed", "form"],
         }));
+        lifetime.assertCurrent(owner);
+        if (docxHost.value === host) host.innerHTML = staged.innerHTML;
       }
     }
     if (kind.value === "xlsx") {
-      const response = await fetch(url.value);
+      const response = await fetch(downloadUrl, { signal: owner.signal });
+      lifetime.assertCurrent(owner);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       if (Number(response.headers.get("content-length") || 0) > 20 * 1024 * 1024) throw new Error(t("previewTooLarge"));
       const buffer = await response.arrayBuffer();
+      lifetime.assertCurrent(owner);
       if (buffer.byteLength > 20 * 1024 * 1024) throw new Error(t("previewTooLarge"));
-      sheetRows.value = await parseWorkbook(buffer);
+      const rows = await parseWorkbook(buffer, owner);
+      lifetime.assertCurrent(owner);
+      sheetRows.value = rows;
     }
   } catch (reason) {
-    if (!(reason instanceof DOMException && reason.name === "AbortError")) {
-      error.value = reason instanceof Error ? reason.message : t("previewFailed");
+    if (lifetime.isCurrent(owner) && !isCancelled(reason)) {
+      error.value = t("previewFailed");
     }
   } finally {
-    loading.value = false;
+    if (lifetime.isCurrent(owner)) loading.value = false;
   }
 }
 
@@ -131,13 +169,13 @@ function openExternal(): void {
   if (url.value) window.open(url.value, "_blank", "noopener,noreferrer");
 }
 
-watch([() => props.open, () => props.deliverable?.id], () => { void load(); });
+watch([() => props.open, () => props.deliverable], () => { void load(); }, { immediate: true, flush: "sync" });
 onBeforeUnmount(reset);
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="open && deliverable" class="preview-backdrop" @mousedown.self="close">
+    <div v-if="open && deliverable && active" class="preview-backdrop" @mousedown.self="close">
       <section class="preview-card" role="dialog" aria-modal="true" :aria-label="deliverable.name" @keydown.esc="close">
         <header class="preview-head">
           <div class="preview-title">

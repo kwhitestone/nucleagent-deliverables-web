@@ -20,6 +20,30 @@ let rejectedVersion: number | null = null;
 let currentVersion = 0;
 let lastNotification = "";
 let activeChannel: ReturnType<typeof createRemoteChildChannel> | undefined;
+let requestScope = new AbortController();
+
+export interface SessionRequest {
+  readonly token: string;
+  readonly signal: AbortSignal;
+}
+
+export function captureSessionRequest(): SessionRequest {
+  return { token: getAccessToken(), signal: requestScope.signal };
+}
+
+function isCurrentSessionRequest(request: SessionRequest): boolean {
+  return request.signal === requestScope.signal && !request.signal.aborted && request.token === getAccessToken();
+}
+
+export function assertCurrentSessionRequest(request: SessionRequest): void {
+  if (!isCurrentSessionRequest(request)) throw new DOMException("Session changed", "AbortError");
+}
+
+function retireRequests(): void {
+  const previous = requestScope;
+  requestScope = new AbortController();
+  previous.abort();
+}
 
 function emitSessionChange(authenticated: boolean): void {
   window.dispatchEvent(new CustomEvent(SESSION_CHANGE_EVENT, { detail: { authenticated } }));
@@ -38,26 +62,33 @@ export function applyShellSession(token: string | null, incomingVersion: number)
   else clearAccessToken();
   if (incomingVersion > (rejectedVersion ?? -1) || !token) rejectedVersion = null;
   lastNotification = "";
-  if (changed) emitSessionChange(Boolean(token));
+  if (changed) {
+    retireRequests();
+    emitSessionChange(Boolean(token));
+  }
   return { accepted: true, changed };
 }
 
-export function handleEmbeddedUnauthorized(reason: "missing" | "rejected"): void {
+export function handleEmbeddedUnauthorized(reason: "missing" | "rejected", request: SessionRequest): void {
+  if (!isCurrentSessionRequest(request)) return;
+  const version = currentVersion;
   if (reason === "rejected") {
     clearAccessToken();
-    rejectedVersion = currentVersion;
+    rejectedVersion = version;
+    retireRequests();
     emitSessionChange(false);
   }
+  if (version !== currentVersion || (reason === "rejected" && getAccessToken())) return;
   if (window.parent === window) return;
-  const key = `${currentVersion}:${reason}`;
+  const key = `${version}:${reason}`;
   if (lastNotification === key) return;
-  lastNotification = key;
-  activeChannel?.send("auth-required", {
+  const sent = activeChannel?.send("auth-required", {
     source: "sub",
     type: "auth-required",
     reason,
-    sessionVersion: currentVersion,
+    sessionVersion: version,
   });
+  if (sent) lastNotification = key;
 }
 
 export function installShellBridge(): () => void {

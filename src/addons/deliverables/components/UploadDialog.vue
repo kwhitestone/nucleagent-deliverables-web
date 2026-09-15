@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { completeUpload, createAppLink, createUpload, importDeliverable, sha256Hex, uploadBytes } from "@/addons/deliverables/api/client";
 import type { Deliverable } from "@/addons/deliverables/api/contracts";
 import { validateUploadSelection } from "@/addons/deliverables/api/uploadProtocol";
+import { isCancelled, useSessionLifetime, type SessionOperation } from "@/addons/deliverables/composables/useSessionLifetime";
 
 const props = defineProps<{ open: boolean; mode: "file" | "app" | "import"; conversationId?: number }>();
 const emit = defineEmits<{ close: []; saved: [deliverable: Deliverable] }>();
@@ -19,12 +20,18 @@ const busy = ref(false);
 const progress = ref(0);
 const error = ref("");
 const fileInput = ref<HTMLInputElement | null>(null);
+const active = ref(false);
+const lifetime = useSessionLifetime(() => {
+  reset();
+  emit("close");
+});
 
 const title = computed(() => props.mode === "file" ? t("uploadTitle") : props.mode === "app" ? t("linkTitle") : t("importTitle"));
 
-watch(() => props.open, (open) => {
-  if (!open) return;
-	conversationId.value = props.conversationId && props.conversationId > 0 ? String(props.conversationId) : "";
+function reset(): void {
+  lifetime.invalidate();
+  active.value = false;
+  conversationId.value = "";
   selectedFile.value = null;
   appName.value = "";
   appUrl.value = "";
@@ -33,10 +40,23 @@ watch(() => props.open, (open) => {
   busy.value = false;
   progress.value = 0;
   error.value = "";
-});
+  if (fileInput.value) fileInput.value.value = "";
+}
+
+watch([() => props.open, () => props.mode, () => props.conversationId], () => {
+  reset();
+  active.value = props.open;
+  if (props.open && props.conversationId && props.conversationId > 0) {
+    conversationId.value = String(props.conversationId);
+  }
+}, { immediate: true, flush: "sync" });
+onBeforeUnmount(reset);
 
 function close(): void {
-  if (!busy.value) emit("close");
+  if (!busy.value) {
+    reset();
+    emit("close");
+  }
 }
 
 function chooseFile(): void {
@@ -53,34 +73,50 @@ function normalizedConversationId(): number {
 }
 
 async function submitFile(): Promise<void> {
+  if (busy.value || !active.value) return;
   const file = selectedFile.value;
   const validation = validateUploadSelection(normalizedConversationId(), file);
   if (validation || !file) {
     error.value = validation || t("chooseValidFile");
     return;
   }
+  const id = normalizedConversationId();
+  await save(async (owner) => {
+    const credential = await createUpload(id, file);
+    lifetime.assertCurrent(owner);
+    const refId = await uploadBytes(file, credential.upload, (loaded, total) => {
+      if (lifetime.isCurrent(owner)) {
+        progress.value = total > 0 ? Math.round((loaded / total) * 100) : 0;
+      }
+    }, owner.signal);
+    lifetime.assertCurrent(owner);
+    const checksum = await sha256Hex(file);
+    lifetime.assertCurrent(owner);
+    return completeUpload(credential.deliverable.id, refId, checksum);
+  }, "uploadFailed");
+}
+
+async function save(create: (owner: SessionOperation) => Promise<Deliverable>, errorKey: string): Promise<void> {
+  if (busy.value || !active.value) return;
+  const owner = lifetime.capture();
   busy.value = true;
   error.value = "";
   try {
-    const credential = await createUpload(normalizedConversationId(), file);
-    const refId = await uploadBytes(file, credential.upload, (loaded, total) => {
-      progress.value = total > 0 ? Math.round((loaded / total) * 100) : 0;
-    });
-    const completed = await completeUpload(
-      credential.deliverable.id,
-      refId,
-      await sha256Hex(file),
-    );
+    const completed = await create(owner);
+    lifetime.assertCurrent(owner);
     emit("saved", completed);
+    lifetime.assertCurrent(owner);
+    reset();
     emit("close");
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : t("uploadFailed");
+    if (lifetime.isCurrent(owner) && !isCancelled(reason)) error.value = t(errorKey);
   } finally {
-    busy.value = false;
+    if (lifetime.isCurrent(owner)) busy.value = false;
   }
 }
 
 async function submitLink(): Promise<void> {
+  if (busy.value || !active.value) return;
   const id = normalizedConversationId();
   if (!Number.isSafeInteger(id) || id <= 0) {
     error.value = t("invalidConversation");
@@ -97,20 +133,11 @@ async function submitLink(): Promise<void> {
     error.value = t("invalidHttpUrl");
     return;
   }
-  busy.value = true;
-  error.value = "";
-  try {
-    const created = await createAppLink({ conversationId: id, name: appName.value.trim(), appUrl: appUrl.value.trim() });
-    emit("saved", created);
-    emit("close");
-  } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : t("addLinkFailed");
-  } finally {
-    busy.value = false;
-  }
+  await save(() => createAppLink({ conversationId: id, name: appName.value.trim(), appUrl: appUrl.value.trim() }), "addLinkFailed");
 }
 
 async function submitImport(): Promise<void> {
+  if (busy.value || !active.value) return;
   const id = normalizedConversationId();
   if (!Number.isSafeInteger(id) || id <= 0) {
     error.value = t("invalidConversation");
@@ -123,27 +150,17 @@ async function submitImport(): Promise<void> {
     error.value = t("invalidHttpUrl");
     return;
   }
-  busy.value = true;
-  error.value = "";
-  try {
-    const created = await importDeliverable({
+  await save(() => importDeliverable({
       conversationId: id,
       name: importName.value.trim() || undefined,
       url: importUrl.value.trim(),
-    });
-    emit("saved", created);
-    emit("close");
-  } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : t("importFailed");
-  } finally {
-    busy.value = false;
-  }
+    }), "importFailed");
 }
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="dialog-backdrop" @mousedown.self="close">
+    <div v-if="open && active" class="dialog-backdrop" @mousedown.self="close">
       <section class="dialog-card" role="dialog" aria-modal="true" :aria-label="title" @keydown.esc="close">
         <header class="dialog-head">
           <div>
