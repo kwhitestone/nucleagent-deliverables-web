@@ -323,8 +323,16 @@ test("trusted shell messages retain their locale and session validation", () => 
   assert.equal(localStorage.getItem(ACCESS_TOKEN_KEY), null);
 });
 
-test("standalone requests reject expired credentials without requiring a shell channel", async () => {
+test("standalone requests reject expired credentials and leave for the shell's /login", async () => {
   Object.defineProperty(childWindow, "parent", { configurable: true, value: childWindow });
+  const assigned: string[] = [];
+  const location = childWindow.location as typeof childWindow.location & { pathname?: string; assign?: (href: string) => void };
+  Object.assign(location, { pathname: "/deliverables", search: "?conversationId=3", assign: (href: string) => assigned.push(href) });
+  const body = { append() {} };
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: { body, createElement: () => ({ setAttribute() {}, querySelector: () => ({}) }) },
+  });
   try {
     session.installShellBridge()();
     globalThis.fetch = async () => response(401);
@@ -332,7 +340,11 @@ test("standalone requests reject expired credentials without requiring a shell c
     assert.match(String(result.error), /Unauthorized/);
     assert.equal(localStorage.getItem(ACCESS_TOKEN_KEY), null);
     assert.equal(messages.length, 0);
+    assert.deepEqual(assigned.map((href) => new URL(href).pathname + new URL(href).search),
+      ["/login?redirect=%2Fdeliverables%3FconversationId%3D3"]);
   } finally {
+    Reflect.deleteProperty(globalThis, "document");
+    Object.assign(location, { search: "" });
     Object.defineProperty(childWindow, "parent", { configurable: true, value: parent });
   }
 });

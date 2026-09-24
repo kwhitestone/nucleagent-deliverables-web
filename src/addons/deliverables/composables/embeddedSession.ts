@@ -1,6 +1,7 @@
 import { clearAccessToken, getAccessToken, setAccessToken } from "@/addons/deliverables/utils/token";
 import { createRemoteChildChannel } from "@prism-fusion/plugin-runtime/remote";
-import { setLocale } from "@/i18n";
+import { setLocale, translate } from "@/i18n";
+import { deliverablesShellPath, redirectToShellLogin } from "../shellLogin";
 import { resolveShellLocale, shouldAcceptShellSession } from "./embeddedSessionPolicy";
 
 const REFRESH_TOKEN_KEY = "nucleagent_refresh_token";
@@ -79,7 +80,10 @@ export function handleEmbeddedUnauthorized(reason: "missing" | "rejected", reque
     emitSessionChange(false);
   }
   if (version !== currentVersion || (reason === "rejected" && getAccessToken())) return;
-  if (window.parent === window) return;
+  if (window.parent === window) {
+    leaveForShellLogin();
+    return;
+  }
   const key = `${version}:${reason}`;
   if (lastNotification === key) return;
   const sent = activeChannel?.send("auth-required", {
@@ -89,6 +93,14 @@ export function handleEmbeddedUnauthorized(reason: "missing" | "rejected", reque
     sessionVersion: version,
   });
   if (sent) lastNotification = key;
+}
+
+/** Standalone only: interstitial, then the shell's /login (login-ux-board §04). */
+export function leaveForShellLogin(): void {
+  redirectToShellLogin(SHELL_ORIGIN, deliverablesShellPath(window.location.pathname + window.location.search), {
+    title: translate("redirectingTitle"),
+    body: translate("redirectingBody"),
+  });
 }
 
 export function installShellBridge(): () => void {
