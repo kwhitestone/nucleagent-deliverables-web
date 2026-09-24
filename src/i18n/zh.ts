@@ -88,4 +88,6 @@ export default {
   workbookParseTimeout: "工作簿解析超时",
   workbookParseFailed: "工作簿解析失败",
   previewTooLarge: "文件过大，无法在线预览",
+  redirectingTitle: "正在前往登录",
+  redirectingBody: "你尚未登录，正在跳转到 NucleAgent 登录页。",
 };

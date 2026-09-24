@@ -88,4 +88,6 @@ export default {
   workbookParseTimeout: "Workbook parsing timed out",
   workbookParseFailed: "Workbook parsing failed",
   previewTooLarge: "This file is too large to preview online",
+  redirectingTitle: "Taking you to sign-in",
+  redirectingBody: "You're signed out — redirecting to the NucleAgent sign-in page.",
 };
