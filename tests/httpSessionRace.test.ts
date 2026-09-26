@@ -388,7 +388,7 @@ test("valid endpoint wrappers retain authorization, query, payload and envelope 
   data = { url: "https://files.example.test/report" };
   assert.equal(await client.getDownloadUrl(7), "https://files.example.test/report");
   for (const call of calls) {
-    assert.equal(new Headers(call.init.headers).get("Authorization"), "Bearer account-a-token");
+    assert.equal(new Headers(call.init.headers).get("Authorization"), "account-a-token");
     assert.equal(call.init.signal?.aborted, false);
     if (call.init.body) assert.equal(new Headers(call.init.headers).get("Content-Type"), "application/json");
   }

@@ -37,7 +37,7 @@ async function request<T>(path: string, init: RequestInit = {}, allowEmptyData =
     throw new DOMException("Authentication required", "AbortError");
   }
   const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${owner.token}`);
+  headers.set("Authorization", owner.token);
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const signal = init.signal ? AbortSignal.any([init.signal, owner.signal]) : owner.signal;
   let response: Response;
