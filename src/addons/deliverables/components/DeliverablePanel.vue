@@ -77,11 +77,16 @@ function listParams(beforeId?: number) {
   };
 }
 
-async function load(append = false): Promise<void> {
+/**
+ * `quiet` refreshes in place: the focus/visibility refresh used to swap the list
+ * for the loading panel, so the first tap into the iframe (which is what fires
+ * `focus`) unmounted the button it landed on and the click was lost.
+ */
+async function load(append = false, quiet = false): Promise<void> {
   const owner = lifetime.capture();
   const version = ++requestVersion;
   if (append) loadingMore.value = true;
-  else loading.value = true;
+  else if (!quiet || !items.value.length) loading.value = true;
   error.value = "";
   try {
     const page = await listDeliverables(listParams(append ? nextBeforeId.value : undefined));
@@ -268,7 +273,7 @@ function onSessionChange(): void {
 }
 
 function refreshWhenVisible(): void {
-  if (document.visibilityState === "visible" && !loading.value && !loadingMore.value) void load();
+  if (document.visibilityState === "visible" && !loading.value && !loadingMore.value) void load(false, true);
 }
 
 onMounted(() => {

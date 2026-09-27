@@ -204,3 +204,28 @@ for (const width of [1024, 1280]) test(`desktop at ${width}px keeps the table, t
     await context.close();
   }
 });
+
+// PROD finding (UNI-MOBILE-IMPL final E2E): in the shell iframe the first tap fires
+// `focus`, whose refresh swapped the list for the loading panel mid-tap, so the
+// row's "⋯" (and desktop Delete) never received the click. A background refresh
+// must keep the list mounted.
+test("a focus refresh keeps the list mounted, so the tap that caused it still lands", { skip }, async () => {
+  const { context, page, errors } = await open(393);
+  try {
+    let release: () => void = () => {};
+    await context.unroute("**/api/v1/deliverables?**");
+    await context.route("**/api/v1/deliverables?**", async (route: any) => {
+      await new Promise<void>((done) => { release = done; });
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ code: 0, message: "ok", data: { items, hasMore: false, nextBeforeId: 0 } }) });
+    });
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator(".state-panel").count(), 0, "no loading panel over existing rows");
+    await page.locator(".more-button").first().click();
+    assert.equal(await page.locator(".sheet-group").count(), 2, "row menu opened");
+    release();
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+});
