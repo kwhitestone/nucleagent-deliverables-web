@@ -5,8 +5,10 @@ import { completeUpload, createAppLink, createUpload, importDeliverable, sha256H
 import type { Deliverable } from "@/addons/deliverables/api/contracts";
 import { validateUploadSelection } from "@/addons/deliverables/api/uploadProtocol";
 import { isCancelled, useSessionLifetime, type SessionOperation } from "@/addons/deliverables/composables/useSessionLifetime";
+import { useNarrow } from "@/addons/deliverables/composables/useNarrow";
 
-const props = defineProps<{ open: boolean; mode: "file" | "app" | "import"; conversationId?: number }>();
+// `file`: already picked by the phone add sheet (board §15 ②→③).
+const props = defineProps<{ open: boolean; mode: "file" | "app" | "import"; conversationId?: number; file?: File | null }>();
 const emit = defineEmits<{ close: []; saved: [deliverable: Deliverable] }>();
 const { t } = useI18n();
 
@@ -21,6 +23,7 @@ const progress = ref(0);
 const error = ref("");
 const fileInput = ref<HTMLInputElement | null>(null);
 const active = ref(false);
+const narrow = useNarrow();
 const lifetime = useSessionLifetime(() => {
   reset();
   emit("close");
@@ -43,13 +46,24 @@ function reset(): void {
   if (fileInput.value) fileInput.value.value = "";
 }
 
-watch([() => props.open, () => props.mode, () => props.conversationId], () => {
+watch([() => props.open, () => props.mode, () => props.conversationId, () => props.file], () => {
   reset();
   active.value = props.open;
   if (props.open && props.conversationId && props.conversationId > 0) {
     conversationId.value = String(props.conversationId);
   }
+  if (props.open && props.mode === "file" && props.file) {
+    selectedFile.value = props.file;
+    autoUpload();
+  }
 }, { immediate: true, flush: "sync" });
+
+// Phone: upload starts on selection (board §15 ③) once the owner is known;
+// otherwise the owner field stays and the primary button starts it.
+function autoUpload(): void {
+  const id = normalizedConversationId();
+  if (narrow.value && selectedFile.value && Number.isSafeInteger(id) && id > 0) void submitFile();
+}
 onBeforeUnmount(reset);
 
 function close(): void {
@@ -66,6 +80,7 @@ function chooseFile(): void {
 function selectFile(event: Event): void {
   selectedFile.value = (event.target as HTMLInputElement).files?.[0] ?? null;
   error.value = "";
+  autoUpload();
 }
 
 function normalizedConversationId(): number {
@@ -181,7 +196,7 @@ async function submitImport(): Promise<void> {
             <input ref="fileInput" class="visually-hidden" type="file" @change="selectFile" />
             <button class="file-picker" type="button" :disabled="busy" @click="chooseFile">
               <strong>{{ selectedFile ? selectedFile.name : t("chooseFile") }}</strong>
-              <span>{{ selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB` : "≤ 100 MB" }}</span>
+              <span>{{ selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB` : "≤ 100 MB" }}<template v-if="busy"> · {{ t("uploading") }} {{ progress }}%</template></span>
             </button>
             <div v-if="busy" class="progress" :aria-label="`${t('uploading')} ${progress}%`">
               <span :style="{ width: `${progress}%` }" />
@@ -248,4 +263,21 @@ async function submitImport(): Promise<void> {
 .button.secondary { border-color: var(--border); color: var(--text-secondary); background: var(--bg-card); }
 .button.primary { color: white; background: var(--grad-teal-indigo); box-shadow: var(--shadow-teal); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+/* Phone: a full-screen page, close top-left, primary action pinned at the bottom (board §15 ③). */
+@media (max-width: 1023.98px) {
+  .dialog-backdrop { place-items: stretch; padding: 0; backdrop-filter: none; }
+  .dialog-card { display: flex; flex-direction: column; width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; animation: none; }
+  .dialog-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 4px; min-height: 52px; padding: 4px; }
+  .dialog-head > div { grid-column: 2; text-align: center; }
+  .dialog-head h2 { overflow: hidden; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+  .dialog-head .eyebrow { display: none; }
+  .icon-button { grid-column: 1; grid-row: 1; width: 44px; height: 44px; background: transparent; }
+  .dialog-body { flex: 1; align-content: start; overflow-y: auto; padding: 16px; }
+  .field input { height: 48px; font-size: 16px; }
+  .file-picker { min-height: 72px; place-content: center start; text-align: left; }
+  .file-picker strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dialog-actions { padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); background: var(--bg-card); }
+  .dialog-actions .secondary { display: none; }
+  .dialog-actions .primary { flex: 1; min-height: 52px; font-size: 16px; }
+}
 </style>

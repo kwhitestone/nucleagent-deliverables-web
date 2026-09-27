@@ -8,6 +8,7 @@ import type { Deliverable } from "@/addons/deliverables/api/contracts";
 import { isCancelled, useSessionLifetime, type SessionOperation } from "@/addons/deliverables/composables/useSessionLifetime";
 import { renderSanitizedDocx } from "@/addons/deliverables/utils/docxPreviewPolicy";
 import { assertSafePreviewUrl, previewKind, type PreviewKind } from "@/addons/deliverables/utils/previewPolicy";
+import { shareOrCopy } from "@/addons/deliverables/utils/share";
 
 const props = defineProps<{ open: boolean; deliverable: Deliverable | null }>();
 const emit = defineEmits<{ close: [] }>();
@@ -22,11 +23,13 @@ const markdown = ref("");
 const sheetRows = ref<string[][]>([]);
 const docxHost = ref<HTMLElement | null>(null);
 const active = ref(false);
+const shareNotice = ref("");
 const lifetime = useSessionLifetime(close);
 
 function reset(): void {
   lifetime.invalidate();
   active.value = false;
+  shareNotice.value = "";
   loading.value = false;
   error.value = "";
   url.value = "";
@@ -169,6 +172,16 @@ function openExternal(): void {
   if (url.value) window.open(url.value, "_blank", "noopener,noreferrer");
 }
 
+// Phone bottom bar (board §15 ④): share sheet, or copy the link where unsupported.
+async function share(): Promise<void> {
+  const owner = lifetime.capture();
+  const name = props.deliverable?.name ?? "";
+  if (!url.value) return;
+  const outcome = await shareOrCopy(typeof navigator === "undefined" ? undefined : navigator, { title: name, url: url.value });
+  if (!lifetime.isCurrent(owner)) return;
+  shareNotice.value = outcome === "copied" ? t("linkCopied") : outcome === "failed" ? t("shareFailed") : "";
+}
+
 watch([() => props.open, () => props.deliverable], () => { void load(); }, { immediate: true, flush: "sync" });
 onBeforeUnmount(reset);
 </script>
@@ -209,6 +222,15 @@ onBeforeUnmount(reset);
           </div>
           <div v-else class="preview-state"><strong>{{ deliverable.name }}</strong><span>{{ t("previewUnavailable") }}</span><button class="button primary" type="button" @click="openExternal">{{ t("download") }}</button></div>
         </div>
+        <footer class="preview-bar">
+          <p v-if="shareNotice" class="share-notice" role="status">{{ shareNotice }}</p>
+          <button class="bar-button" type="button" :disabled="!url" @click="share">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v13M7 8l5-5 5 5M5 13v6a2 2 0 002 2h10a2 2 0 002-2v-6" /></svg>{{ t("share") }}
+          </button>
+          <button class="bar-button primary" type="button" :disabled="!url" @click="openExternal">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12M6 10l6 6 6-6M4 20h16" /></svg>{{ deliverable.source === "app-link" ? t("openApp") : t("download") }}
+          </button>
+        </footer>
       </section>
     </div>
   </Teleport>
@@ -247,5 +269,25 @@ onBeforeUnmount(reset);
 .app-preview span { color: var(--accent); font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: .14em; }
 .app-preview strong { font-size: 22px; }
 .app-preview small { overflow: hidden; color: var(--text-secondary); text-overflow: ellipsis; white-space: nowrap; }
+.preview-bar { display: none; }
 @media (max-width: 640px) { .preview-backdrop { padding: 0; } .preview-card { width: 100%; height: 100%; border-radius: 0; } .document { width: calc(100% - 24px); margin: 12px; padding: 22px; } }
+/* Phone: full-screen second level, back top-left, actions in the thumb zone (board §15 ④). */
+@media (max-width: 1023.98px) {
+  .preview-backdrop { padding: 0; backdrop-filter: none; }
+  .preview-card { grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; animation: none; }
+  .preview-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 4px; min-height: 52px; padding: 4px; }
+  .preview-title { grid-column: 2; text-align: center; }
+  .preview-title h2 { font-size: 16px; }
+  .preview-title span { font-size: 11px; }
+  .preview-actions { display: contents; }
+  .preview-actions .button { display: none; }
+  .icon-button { grid-column: 1; grid-row: 1; width: 44px; min-height: 44px; background: transparent; }
+  .document { width: calc(100% - 24px); margin: 12px; padding: 22px; }
+  .preview-bar { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--bg-card); }
+  .bar-button { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 52px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); color: var(--text-primary); background: var(--bg-card); font-size: 16px; font-weight: 650; cursor: pointer; }
+  .bar-button.primary { border-color: transparent; color: white; background: var(--grad-teal-indigo); }
+  .bar-button:disabled { cursor: not-allowed; opacity: .55; }
+  .bar-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .share-notice { position: absolute; right: 16px; bottom: calc(100% + 8px); left: 16px; padding: 10px 12px; border: 1px solid var(--teal-200); border-radius: var(--r-md); color: var(--teal-800); background: var(--teal-50); font-weight: 700; text-align: center; }
+}
 </style>

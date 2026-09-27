@@ -738,3 +738,98 @@ for (const retire of ["logout", "unmount", "close", "context"]) {
     assert.equal(mounted.state.busy, false);
   });
 }
+
+// UNI-MOBILE-IMPL board §15: phone add sheet, row menu and upload-on-pick.
+function withNarrow(t: TestContext, matches: boolean): void {
+  Object.defineProperty(childWindow, "matchMedia", {
+    configurable: true,
+    value: () => ({ matches, addEventListener: () => undefined, removeEventListener: () => undefined }),
+  });
+  t.after(() => Reflect.deleteProperty(childWindow, "matchMedia"));
+}
+
+async function uploadWithFile(props: Record<string, unknown>) {
+  const saved: unknown[] = [];
+  const mounted = mount(UploadDialog, { open: false, mode: "file", file: null, onSaved: (value: unknown) => { saved.push(value); }, onClose: () => undefined, ...props });
+  mounted.props.file = new File(["private"], "private.txt", { type: "text/plain" });
+  mounted.props.open = true;
+  await flush();
+  return { ...mounted, saved };
+}
+
+test("phone upload starts on pick when the owning conversation is locked", async (t) => {
+  withNarrow(t, true);
+  const calls: unknown[][] = [];
+  fixtures.api.createUpload = async (...args) => { calls.push(args); return { deliverable: item, upload: { uploadUrl: signedUrl } }; };
+  const mounted = await uploadWithFile({ conversationId: 12 });
+  await flush();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 12);
+  assert.deepEqual(mounted.saved, [item]);
+});
+
+test("phone upload waits for an owner, then starts on the next pick", async (t) => {
+  withNarrow(t, true);
+  let calls = 0;
+  fixtures.api.createUpload = async () => { calls++; return { deliverable: item, upload: { uploadUrl: signedUrl } }; };
+  const mounted = await uploadWithFile({});
+  assert.equal(calls, 0);
+  assert.equal(mounted.state.selectedFile?.name, "private.txt");
+  mounted.state.conversationId = "12";
+  mounted.state.selectFile({ target: { files: [new File(["next"], "next.txt")] } });
+  await flush();
+  assert.equal(calls, 1);
+});
+
+test("desktop upload keeps the explicit start step", async () => {
+  let calls = 0;
+  fixtures.api.createUpload = async () => { calls++; return { deliverable: item, upload: { uploadUrl: signedUrl } }; };
+  const mounted = await uploadWithFile({ conversationId: 12 });
+  assert.equal(calls, 0);
+  assert.equal(mounted.state.selectedFile?.name, "private.txt");
+});
+
+test("panel phone sheets list only existing actions and close before running them", async () => {
+  const mounted = mount(DeliverablePanel, {});
+  await flush();
+  assert.deepEqual(mounted.state.addGroups.map((group: any[]) => group.map((action) => action.label)), [
+    ["uploadTitle", "fromPhotos", "importUrl", "addLink"], ["cancel"],
+  ]);
+  mounted.state.addSheetOpen = true;
+  mounted.state.addGroups[0][2].run();
+  assert.equal(mounted.state.addSheetOpen, false);
+  assert.equal(mounted.state.uploadMode, "import");
+  let clicked = 0;
+  mounted.state.fileInput = { value: "stale", click: () => { clicked++; } };
+  mounted.state.addGroups[0][0].run();
+  assert.equal(clicked, 1);
+  assert.equal(mounted.state.fileInput.value, "");
+  const picked = new File(["x"], "x.png", { type: "image/png" });
+  mounted.state.filePicked({ target: { files: [picked] } });
+  assert.equal(mounted.state.uploadMode, "file");
+  assert.equal(mounted.state.pickedFile, picked);
+  mounted.state.closeUpload();
+  assert.equal(mounted.state.pickedFile, null);
+
+  assert.deepEqual(mounted.state.menuGroups, []);
+  mounted.state.menuItem = item;
+  const labels = mounted.state.menuGroups.map((group: any[]) => group.map((action) => [action.label, Boolean(action.danger)]));
+  assert.deepEqual(labels, [[["preview", false], ["download", false], ["clone…", false]], [["remove", true]]]);
+  mounted.state.menuGroups[0][0].run();
+  assert.equal(mounted.state.menuItem, null);
+  assert.equal(mounted.state.previewItem?.id, item.id);
+  mounted.state.menuItem = { ...item, source: "app-link", appUrl: "https://app.example.test" };
+  assert.deepEqual(mounted.state.menuGroups[0].map((action: any) => action.label), ["openApp", "clone…"]);
+  assert.equal(mounted.state.rowMeta(mounted.state.menuItem), "appSource");
+  assert.equal(mounted.state.rowMeta(item), "7 B");
+
+  fixtures.api.listDeliverables = () => new Promise(() => {});
+  mounted.state.setKind("image");
+  assert.equal(mounted.state.kind, "image");
+  mounted.state.addSheetOpen = true;
+  mounted.state.pickedFile = picked;
+  session.applyShellSession("account-b-fixture", ++version);
+  assert.equal(mounted.state.addSheetOpen, false);
+  assert.equal(mounted.state.menuItem, null);
+  assert.equal(mounted.state.pickedFile, null);
+});

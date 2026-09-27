@@ -90,4 +90,12 @@ export default {
   previewTooLarge: "This file is too large to preview online",
   redirectingTitle: "Taking you to sign-in",
   redirectingBody: "You're signed out — redirecting to the NucleAgent sign-in page.",
+  addTitle: "Add to Library",
+  fromPhotos: "Choose from Photos",
+  chipAll: "All",
+  chipDocuments: "Docs",
+  chipMedia: "Media",
+  share: "Share",
+  linkCopied: "Link copied",
+  shareFailed: "Could not share",
 };
