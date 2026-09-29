@@ -1,0 +1,48 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+function render(overrides: Record<string, string>) {
+  const directory = mkdtempSync(join(tmpdir(), "deliverables-web-csp-"));
+  const template = join(directory, "template");
+  const output = join(directory, "output");
+  try {
+    writeFileSync(template, readFileSync(new URL("../nginx.conf.template", import.meta.url)));
+    const script = readFileSync(new URL("../docker-entrypoint.d/40-runtime-config.sh", import.meta.url), "utf8")
+      .replace("/etc/nginx/runtime.conf.template", template)
+      .replace("/etc/nginx/conf.d/default.conf", output);
+    const result = spawnSync("sh", ["-c", script], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, DELIVERABLES_UPSTREAM: "https://api.example.test",
+        SHELL_ORIGIN: "https://shell.example.test", ...overrides },
+    });
+    return { status: result.status, stderr: result.stderr,
+      config: result.status === 0 ? readFileSync(output, "utf8") : "" };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test("custom template is outside the base image automatic envsubst directory", () => {
+  const dockerfile = readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
+  assert.match(dockerfile, /^COPY nginx\.conf\.template \/etc\/nginx\/runtime\.conf\.template$/m);
+  assert.doesNotMatch(dockerfile, /^COPY .* \/etc\/nginx\/templates\//m);
+});
+
+test("runtime hook renders the template and preserves nginx variables", () => {
+  const result = render({});
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.config, /proxy_pass https:\/\/api\.example\.test\//);
+  assert.match(result.config, /frame-ancestors https:\/\/shell\.example\.test"/);
+  assert.match(result.config, /proxy_set_header Host \$proxy_host/);
+  assert.match(result.config, /try_files \$uri \$uri\/ \/index.html/);
+  assert.doesNotMatch(result.config, /\$\{/);
+});
+
+test("runtime hook rejects invalid origins", () => {
+  assert.notEqual(render({ DELIVERABLES_UPSTREAM: "https://user:pass@example.test" }).status, 0);
+  assert.notEqual(render({ SHELL_ORIGIN: "https://example.test/path" }).status, 0);
+});
