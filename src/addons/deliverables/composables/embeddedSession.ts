@@ -3,6 +3,7 @@ import { createRemoteChildChannel } from "@prism-fusion/plugin-runtime/remote";
 import { setLocale, translate } from "@/i18n";
 import { deliverablesShellPath, redirectToShellLogin } from "../shellLogin";
 import { resolveShellLocale, shouldAcceptShellSession } from "./embeddedSessionPolicy";
+import { outerAware } from "@/outerHost";
 
 const REFRESH_TOKEN_KEY = "nucleagent_refresh_token";
 const SESSION_VERSION_KEY = "nucleagent_session_version";
@@ -13,7 +14,7 @@ const runtimeConfig = (globalThis as typeof globalThis & {
 }).__NUCLEAGENT_DELIVERABLES_CONFIG__;
 
 const SHELL_ORIGIN = new URL(
-  runtimeConfig?.shellUrl?.trim() || import.meta.env.VITE_SHELL_URL || "http://localhost:26600",
+  outerAware(runtimeConfig?.shellUrl?.trim() || import.meta.env.VITE_SHELL_URL || "http://localhost:26600"),
   window.location.origin,
 ).origin;
 

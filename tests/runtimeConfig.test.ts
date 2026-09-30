@@ -32,17 +32,31 @@ test("custom template is outside the base image automatic envsubst directory", (
   assert.doesNotMatch(dockerfile, /^COPY .* \/etc\/nginx\/templates\//m);
 });
 
-test("runtime hook renders the template and preserves nginx variables", () => {
+test("runtime CSP defaults to the shell and preserves nginx variables", () => {
   const result = render({});
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.config, /proxy_pass https:\/\/api\.example\.test\//);
   assert.match(result.config, /frame-ancestors https:\/\/shell\.example\.test"/);
   assert.match(result.config, /proxy_set_header Host \$proxy_host/);
   assert.match(result.config, /try_files \$uri \$uri\/ \/index.html/);
-  assert.doesNotMatch(result.config, /\$\{/);
 });
 
-test("runtime hook rejects invalid origins", () => {
+test("runtime CSP accepts an exact configurable shell and engine origin list", () => {
+  const result = render({ FRAME_ANCESTORS: "https://shell.example.test,https://engine.example.test:8443" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.config, /frame-ancestors https:\/\/shell\.example\.test https:\/\/engine\.example\.test:8443"/);
+});
+
+test("runtime CSP rejects empty items, wildcards, credentials and configuration injection", () => {
+  for (const value of ["", ",", "https://shell.example.test,", ",https://shell.example.test",
+    "https://shell.example.test,,https://engine.example.test", "*", "'self'",
+    "https://*.example.test", "https://user:pass@example.test", "https://example.test/path",
+    "https://example.test?query", "https://example.test#fragment", "https://example.test:0",
+    "https://example.test:65536", "https://example.test https://engine.example.test",
+    "https://example.test,\nhttps://engine.example.test", 'https://example.test"; include /tmp/evil; #']) {
+    const result = render({ FRAME_ANCESTORS: value });
+    assert.notEqual(result.status, 0, JSON.stringify(value));
+    assert.match(result.stderr, /FRAME_ANCESTORS/);
+  }
   assert.notEqual(render({ DELIVERABLES_UPSTREAM: "https://user:pass@example.test" }).status, 0);
   assert.notEqual(render({ SHELL_ORIGIN: "https://example.test/path" }).status, 0);
 });

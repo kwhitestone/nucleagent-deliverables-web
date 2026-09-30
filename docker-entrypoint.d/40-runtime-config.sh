@@ -24,10 +24,27 @@ for var in DELIVERABLES_UPSTREAM SHELL_ORIGIN; do
     fi
 done
 
-export DELIVERABLES_UPSTREAM SHELL_ORIGIN
+# An unset list preserves the single-shell contract; an explicit empty list
+# is a configuration error. Parse commas without shell word splitting.
+remaining=${FRAME_ANCESTORS-$SHELL_ORIGIN}
+FRAME_ANCESTORS=
+while :; do
+    origin=${remaining%%,*}
+    if ! valid_origin "$origin"; then
+        printf '%s\n' 'FRAME_ANCESTORS must be a comma-separated list of exact HTTP(S) origins.' >&2
+        exit 1
+    fi
+    FRAME_ANCESTORS="${FRAME_ANCESTORS:+$FRAME_ANCESTORS }$origin"
+    case "$remaining" in
+        *,*) remaining=${remaining#*,} ;;
+        *) break ;;
+    esac
+done
+
+export DELIVERABLES_UPSTREAM FRAME_ANCESTORS
 
 # Substitute only our own placeholders — nginx's own $uri, $proxy_host and
 # $http_authorization must survive into the generated config untouched.
-envsubst '${DELIVERABLES_UPSTREAM} ${SHELL_ORIGIN}' \
+envsubst '${DELIVERABLES_UPSTREAM} ${FRAME_ANCESTORS}' \
     < /etc/nginx/runtime.conf.template \
     > /etc/nginx/conf.d/default.conf

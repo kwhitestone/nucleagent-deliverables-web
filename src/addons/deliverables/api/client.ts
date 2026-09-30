@@ -15,8 +15,9 @@ import {
   handleEmbeddedUnauthorized,
 } from "@/addons/deliverables/composables/embeddedSession";
 import { translate } from "@/i18n";
+import { outerAware } from "@/outerHost";
 
-const API_BASE = (import.meta.env.VITE_DELIVERABLES_API_URL ?? "").trim().replace(/\/$/, "");
+const API_BASE = outerAware((import.meta.env.VITE_DELIVERABLES_API_URL ?? "").trim().replace(/\/$/, ""));
 const ROOT = `${API_BASE}/api/v1/deliverables`;
 
 export interface ListParams {

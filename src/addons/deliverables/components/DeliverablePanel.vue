@@ -10,6 +10,7 @@ import {
 import type { Deliverable } from "@/addons/deliverables/api/contracts";
 import { isCancelled, useSessionLifetime } from "@/addons/deliverables/composables/useSessionLifetime";
 import { assertSafePreviewUrl, previewKind, shortFileType } from "@/addons/deliverables/utils/previewPolicy";
+import ActionSheet, { type SheetAction } from "./ActionSheet.vue";
 import PreviewDialog from "./PreviewDialog.vue";
 import UploadDialog from "./UploadDialog.vue";
 
@@ -31,7 +32,13 @@ const dateTo = ref("");
 const hasMore = ref(false);
 const nextBeforeId = ref(0);
 const uploadMode = ref<"file" | "app" | "import" | null>(null);
+const pickedFile = ref<File | null>(null);
+const fileInput = ref<HTMLInputElement | null>(null);
+const photoInput = ref<HTMLInputElement | null>(null);
 const previewItem = ref<Deliverable | null>(null);
+// Phone chrome (board §15): the "+" add sheet and the per-row "⋯" sheet.
+const addSheetOpen = ref(false);
+const menuItem = ref<Deliverable | null>(null);
 const notice = ref("");
 let searchTimer: number | null = null;
 let autoRefreshTimer: number | null = null;
@@ -40,6 +47,20 @@ let requestVersion = 0;
 const lifetime = useSessionLifetime(onSessionChange);
 
 const scopedToConversation = computed(() => Boolean(props.conversationId && props.conversationId > 0));
+// Single-path line icons from the board's symbol set (static, never data).
+const ICONS = {
+  upload: "M12 16V4M6 10l6-6 6 6M4 20h16",
+  photos: "M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zM10 8.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zM21 15l-5-5L5 21",
+  link: "M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7",
+  app: "M4 3h16a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2zM8 21h8M12 17v4",
+};
+const kindChips = [
+  { value: "", key: "chipAll" },
+  { value: "document", key: "chipDocuments" },
+  { value: "image", key: "images" },
+  { value: "media", key: "chipMedia" },
+  { value: "app", key: "applications" },
+];
 const hasFilters = computed(() => Boolean(query.value || (!scopedToConversation.value && conversationId.value) || kind.value || dateFrom.value || dateTo.value));
 
 function listParams(beforeId?: number) {
@@ -56,11 +77,16 @@ function listParams(beforeId?: number) {
   };
 }
 
-async function load(append = false): Promise<void> {
+/**
+ * `quiet` refreshes in place: the focus/visibility refresh used to swap the list
+ * for the loading panel, so the first tap into the iframe (which is what fires
+ * `focus`) unmounted the button it landed on and the click was lost.
+ */
+async function load(append = false, quiet = false): Promise<void> {
   const owner = lifetime.capture();
   const version = ++requestVersion;
   if (append) loadingMore.value = true;
-  else loading.value = true;
+  else if (!quiet || !items.value.length) loading.value = true;
   error.value = "";
   try {
     const page = await listDeliverables(listParams(append ? nextBeforeId.value : undefined));
@@ -103,6 +129,62 @@ function handleSaved(deliverable: Deliverable): void {
   notice.value = deliverable.source === "app-link" ? t("linkCreated") : deliverable.source === "import" ? t("imported") : t("uploaded");
   if (noticeTimer) window.clearTimeout(noticeTimer);
   noticeTimer = window.setTimeout(() => { notice.value = ""; }, 2600);
+}
+
+function openUpload(mode: "file" | "app" | "import"): void {
+  addSheetOpen.value = false;
+  pickedFile.value = null;
+  uploadMode.value = mode;
+}
+
+// The native picker must open inside the tap itself (iOS drops deferred clicks),
+// so the phone sheet owns the inputs and hands the picked file to the upload page.
+function pickFile(input: HTMLInputElement | null): void {
+  addSheetOpen.value = false;
+  if (!input) return;
+  input.value = "";
+  input.click();
+}
+
+function filePicked(event: Event): void {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  pickedFile.value = file;
+  uploadMode.value = "file";
+}
+
+function closeUpload(): void {
+  uploadMode.value = null;
+  pickedFile.value = null;
+}
+
+function setKind(value: string): void {
+  kind.value = value;
+  void load();
+}
+
+const addGroups = computed<SheetAction[][]>(() => [
+  [
+    { label: t("uploadTitle"), icon: ICONS.upload, run: () => pickFile(fileInput.value) },
+    { label: t("fromPhotos"), icon: ICONS.photos, run: () => pickFile(photoInput.value) },
+    { label: t("importUrl"), icon: ICONS.link, run: () => openUpload("import") },
+    { label: t("addLink"), icon: ICONS.app, run: () => openUpload("app") },
+  ],
+  [{ label: t("cancel"), center: true, run: () => { addSheetOpen.value = false; } }],
+]);
+
+const menuGroups = computed<SheetAction[][]>(() => {
+  const item = menuItem.value;
+  if (!item) return [];
+  const act = (run: (target: Deliverable) => unknown) => () => { menuItem.value = null; void run(item); };
+  const main: SheetAction[] = [{ label: item.source === "app-link" ? t("openApp") : t("preview"), run: act(showPreview) }];
+  if (item.source !== "app-link") main.push({ label: t("download"), run: act(download) });
+  main.push({ label: `${t("clone")}…`, run: act(clone) });
+  return [main, [{ label: t("remove"), danger: true, run: act(remove) }]];
+});
+
+function rowMeta(item: Deliverable): string {
+  return item.source === "app-link" ? t("appSource") : formatSize(item.size);
 }
 
 function showPreview(item: Deliverable): void {
@@ -177,6 +259,9 @@ function onSessionChange(): void {
   if (noticeTimer) window.clearTimeout(noticeTimer);
   previewItem.value = null;
   uploadMode.value = null;
+  pickedFile.value = null;
+  addSheetOpen.value = false;
+  menuItem.value = null;
   items.value = [];
   notice.value = "";
   error.value = "";
@@ -188,7 +273,7 @@ function onSessionChange(): void {
 }
 
 function refreshWhenVisible(): void {
-  if (document.visibilityState === "visible" && !loading.value && !loadingMore.value) void load();
+  if (document.visibilityState === "visible" && !loading.value && !loadingMore.value) void load(false, true);
 }
 
 onMounted(() => {
@@ -220,6 +305,9 @@ onBeforeUnmount(() => {
         <button class="button secondary" type="button" @click="uploadMode = 'import'">{{ t("importUrl") }}</button>
         <button class="button primary" type="button" @click="uploadMode = 'file'">{{ t("upload") }}</button>
       </div>
+      <button class="add-button" type="button" :aria-label="t('addTitle')" @click="addSheetOpen = true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
     </header>
 
     <div class="catalog-card anim-fade-up delay-1">
@@ -240,6 +328,9 @@ onBeforeUnmount(() => {
         <input v-model="dateTo" class="filter-control date" type="date" :aria-label="t('endDate')" @change="load()" />
         <button v-if="hasFilters" class="text-button" type="button" @click="clearFilters">{{ t("clearFilters") }}</button>
         <button class="text-button" type="button" @click="load()">{{ t("refresh") }}</button>
+      </div>
+      <div class="chips" role="group" :aria-label="t('allTypes')">
+        <button v-for="chip in kindChips" :key="chip.key" class="chip" type="button" :aria-pressed="kind === chip.value" @click="setKind(chip.value)">{{ t(chip.key) }}</button>
       </div>
 
       <div v-if="loading" class="state-panel" aria-live="polite">
@@ -288,11 +379,15 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="mobile-list">
-          <article v-for="item in items" :key="item.id" class="mobile-card">
-            <button class="file-cell" type="button" @click="showPreview(item)"><span class="type-badge">{{ item.source === "app-link" ? "APP" : shortFileType(item.mimeType, item.name) }}</span><span class="file-copy"><strong>{{ item.name }}</strong><small>#{{ item.conversationId }} · {{ sourceLabel(item.source) }}</small></span></button>
-            <div class="mobile-meta"><span>{{ formatSize(item.size) }}</span><span>{{ formatDate(item.createdAt) }}</span></div>
-            <div class="row-actions"><button type="button" @click="showPreview(item)">{{ t("preview") }}</button><button v-if="item.source !== 'app-link'" type="button" @click="download(item)">{{ t("download") }}</button><button class="danger" type="button" @click="remove(item)">{{ t("remove") }}</button></div>
-          </article>
+          <div v-for="item in items" :key="item.id" class="mobile-row">
+            <button class="file-cell" type="button" @click="showPreview(item)">
+              <span class="type-badge" :data-kind="previewKind(item.mimeType, item.name)">{{ item.source === "app-link" ? "APP" : shortFileType(item.mimeType, item.name) }}</span>
+              <span class="file-copy"><strong>{{ item.name }}</strong><small>{{ rowMeta(item) }}</small></span>
+            </button>
+            <button class="more-button" type="button" :aria-label="`${t('actions')}: ${item.name}`" @click="menuItem = item">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10.2a1.8 1.8 0 110 3.6 1.8 1.8 0 010-3.6zM12 10.2a1.8 1.8 0 110 3.6 1.8 1.8 0 010-3.6zM19 10.2a1.8 1.8 0 110 3.6 1.8 1.8 0 010-3.6z" /></svg>
+            </button>
+          </div>
         </div>
 
         <footer v-if="hasMore" class="load-more"><button class="button secondary" type="button" :disabled="loadingMore" @click="load(true)">{{ loadingMore ? t("loading") : t("loadMore") }}</button></footer>
@@ -301,7 +396,11 @@ onBeforeUnmount(() => {
 
     <p v-if="error && items.length" class="inline-error" role="alert">{{ error }}</p>
     <p v-if="notice" class="toast" role="status">{{ notice }}</p>
-    <UploadDialog :open="uploadMode !== null" :mode="uploadMode || 'file'" :conversation-id="props.conversationId" @close="uploadMode = null" @saved="handleSaved" />
+    <input ref="fileInput" class="visually-hidden" type="file" tabindex="-1" aria-hidden="true" @change="filePicked" />
+    <input ref="photoInput" class="visually-hidden" type="file" accept="image/*,video/*" tabindex="-1" aria-hidden="true" @change="filePicked" />
+    <UploadDialog :open="uploadMode !== null" :mode="uploadMode || 'file'" :file="pickedFile" :conversation-id="props.conversationId" @close="closeUpload" @saved="handleSaved" />
+    <ActionSheet :open="addSheetOpen" :title="t('addTitle')" :groups="addGroups" @close="addSheetOpen = false" />
+    <ActionSheet :open="menuItem !== null" :title="menuItem?.name ?? ''" :groups="menuGroups" @close="menuItem = null" />
     <PreviewDialog :open="previewItem !== null" :deliverable="previewItem" @close="previewItem = null" />
   </section>
 </template>
@@ -361,9 +460,35 @@ tbody tr { transition: background .14s var(--ease); } tbody tr:hover { backgroun
 .row-actions .danger { color: var(--rose-500); }
 .actions-heading { text-align: left; }
 .load-more { display: flex; justify-content: center; padding: 5px 18px 19px; }
-.mobile-list { display: none; }
+.add-button, .chips, .mobile-list { display: none; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .inline-error { margin-top: 12px; color: var(--rose-500); font-size: 12px; }
 .toast { position: fixed; right: 24px; bottom: 24px; z-index: 120; padding: 11px 15px; border: 1px solid var(--teal-200); border-radius: var(--r-md); color: var(--teal-800); background: var(--teal-50); box-shadow: var(--shadow-lg); font-weight: 700; animation: slide-in-right .2s var(--ease-out); }
-@media (max-width: 900px) { .date { display: none; }.table-wrap { display: none; }.mobile-list { display: grid; gap: 10px; padding: 14px; }.mobile-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: white; }.mobile-meta { display: flex; justify-content: space-between; color: var(--text-tertiary); font-size: 10px; } }
-@media (max-width: 640px) { .page-head { align-items: stretch; flex-direction: column; }.primary-actions { display: grid; grid-template-columns: 1fr 1fr; }.primary-actions .primary { grid-column: 1 / -1; }.filters { padding: 12px; }.search-field { flex-basis: 100%; }.conversation, .filter-control { flex: 1; }.toast { right: 14px; bottom: 14px; left: 14px; text-align: center; } }
+/* Phone layout (UNI-MOBILE-IMPL board §15, Ruling 1a: below 1024px). */
+@media (max-width: 1023.98px) {
+  .page-head, .page-head.compact { flex-direction: row; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .eyebrow, .heading-copy p, .primary-actions, .table-summary, .table-wrap { display: none; }
+  h1, .page-head.compact h1 { font-family: var(--font-body); font-size: 22px; font-weight: 700; letter-spacing: 0; }
+  .add-button { display: grid; flex: none; width: 44px; height: 44px; place-items: center; border: 0; border-radius: var(--r-md); color: var(--text-primary); background: transparent; cursor: pointer; }
+  .add-button svg, .more-button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+  .catalog-card { border-radius: var(--r-lg); backdrop-filter: none; }
+  .filters { padding: 12px 12px 10px; border-bottom: 0; background: transparent; }
+  .filters > :not(.search-field) { display: none; }
+  .search-field { flex-basis: 100%; min-width: 0; height: 40px; }
+  .search-field input { height: 44px; margin: -2px 0; font-size: 16px; }
+  .chips { display: flex; gap: 8px; overflow-x: auto; padding: 0 12px 12px; scrollbar-width: none; }
+  .chip { flex: none; height: 44px; padding: 0 14px; border: 1px solid var(--border); border-radius: var(--r-full); color: var(--text-primary); background: var(--bg-card); font-size: 14px; font-weight: 600; cursor: pointer; }
+  .chip[aria-pressed="true"] { border-color: transparent; color: var(--indigo-600); background: var(--grad-brand-soft); }
+  .mobile-list { display: block; overflow: hidden; margin: 0 12px 12px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-card); }
+  .mobile-row { display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: center; gap: 4px; min-height: 64px; padding: 0 4px 0 12px; }
+  .mobile-row + .mobile-row { border-top: 1px solid var(--border); }
+  .mobile-row .file-cell { min-height: 64px; gap: 12px; }
+  .mobile-row .type-badge { width: 40px; height: 40px; border-radius: var(--r-md); font-size: 10.5px; }
+  .mobile-row .file-copy strong { font-size: 15px; font-weight: 600; }
+  .mobile-row .file-copy small { color: var(--text-secondary); font-size: 12.5px; }
+  .more-button { display: grid; width: 44px; height: 44px; place-items: center; border: 0; border-radius: var(--r-md); color: var(--text-secondary); background: transparent; cursor: pointer; }
+  .button { min-height: 44px; }
+  .state-panel { min-height: 240px; padding: 24px 16px; }
+  .toast { right: 14px; bottom: 14px; left: 14px; text-align: center; }
+}
 </style>

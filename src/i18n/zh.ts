@@ -90,4 +90,12 @@ export default {
   previewTooLarge: "文件过大，无法在线预览",
   redirectingTitle: "正在前往登录",
   redirectingBody: "你尚未登录，正在跳转到 NucleAgent 登录页。",
+  addTitle: "添加到成果库",
+  fromPhotos: "从相册选择",
+  chipAll: "全部",
+  chipDocuments: "文档",
+  chipMedia: "音视频",
+  share: "分享",
+  linkCopied: "链接已复制",
+  shareFailed: "分享失败",
 };

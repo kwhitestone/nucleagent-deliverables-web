@@ -45,6 +45,7 @@ Vite 会把 `import.meta.env.*` 内联进 bundle，所以下面这些**不能**�
 |---|---|---|
 | `DELIVERABLES_UPSTREAM` | 见 Dockerfile | 后端反代目标 |
 | `SHELL_ORIGIN` | 跟随 `VITE_SHELL_URL` | 写进 CSP `frame-ancestors`，决定谁能 iframe 本站 |
+| `FRAME_ANCESTORS` | 未设置时使用 `SHELL_ORIGIN` | 逗号分隔的精确 HTTP(S) origin 列表（如内外网两个主壳域名）；每项同样校验，显式空值不合法 |
 
 两者都由 `docker-entrypoint.d/40-runtime-config.sh` 校验后再注入 nginx 配置：
 必须是单个 `scheme://host[:port]` 形式的 origin，带路径、查询串或凭据一律拒绝并
