@@ -12,7 +12,7 @@ const props = defineProps<{ open: boolean; mode: "file" | "app" | "import"; conv
 const emit = defineEmits<{ close: []; saved: [deliverable: Deliverable] }>();
 const { t } = useI18n();
 
-const conversationId = ref("");
+const conversationIdInput = ref("");
 const selectedFile = ref<File | null>(null);
 const appName = ref("");
 const appUrl = ref("");
@@ -34,7 +34,7 @@ const title = computed(() => props.mode === "file" ? t("uploadTitle") : props.mo
 function reset(): void {
   lifetime.invalidate();
   active.value = false;
-  conversationId.value = "";
+  conversationIdInput.value = "";
   selectedFile.value = null;
   appName.value = "";
   appUrl.value = "";
@@ -50,7 +50,7 @@ watch([() => props.open, () => props.mode, () => props.conversationId, () => pro
   reset();
   active.value = props.open;
   if (props.open && props.conversationId && props.conversationId > 0) {
-    conversationId.value = String(props.conversationId);
+    conversationIdInput.value = String(props.conversationId);
   }
   if (props.open && props.mode === "file" && props.file) {
     selectedFile.value = props.file;
@@ -84,7 +84,7 @@ function selectFile(event: Event): void {
 }
 
 function normalizedConversationId(): number {
-  return Number(conversationId.value.trim());
+  return Number(conversationIdInput.value.trim());
 }
 
 async function submitFile(): Promise<void> {
@@ -188,7 +188,7 @@ async function submitImport(): Promise<void> {
         <div class="dialog-body">
           <label class="field">
             <span>{{ t("conversation") }}</span>
-            <input v-model="conversationId" inputmode="numeric" autocomplete="off" placeholder="128" :disabled="Boolean(props.conversationId)" />
+            <input v-model="conversationIdInput" inputmode="numeric" autocomplete="off" placeholder="128" :disabled="Boolean(props.conversationId)" />
             <small>{{ t("conversationHint") }}</small>
           </label>
 
