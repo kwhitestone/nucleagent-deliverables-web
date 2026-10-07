@@ -814,12 +814,16 @@ test("panel phone sheets list only existing actions and close before running the
   assert.deepEqual(mounted.state.menuGroups, []);
   mounted.state.menuItem = item;
   const labels = mounted.state.menuGroups.map((group: any[]) => group.map((action) => [action.label, Boolean(action.danger)]));
-  assert.deepEqual(labels, [[["preview", false], ["download", false], ["clone…", false]], [["remove", true]]]);
+  assert.deepEqual(labels, [[["preview", false], ["download", false], ["clone…", false], ["openConversation", false]], [["remove", true]]]);
+  mounted.state.menuGroups[0][3].run();
+  assert.equal(mounted.state.menuItem, null);
+  assert.deepEqual(opened, [["http://localhost:26600/chat/12", "_blank", "noopener,noreferrer"]]);
+  mounted.state.menuItem = item;
   mounted.state.menuGroups[0][0].run();
   assert.equal(mounted.state.menuItem, null);
   assert.equal(mounted.state.previewItem?.id, item.id);
   mounted.state.menuItem = { ...item, source: "app-link", appUrl: "https://app.example.test" };
-  assert.deepEqual(mounted.state.menuGroups[0].map((action: any) => action.label), ["openApp", "clone…"]);
+  assert.deepEqual(mounted.state.menuGroups[0].map((action: any) => action.label), ["openApp", "clone…", "openConversation"]);
   assert.equal(mounted.state.rowMeta(mounted.state.menuItem), "appSource");
   assert.equal(mounted.state.rowMeta(item), "7 B");
 
@@ -832,4 +836,14 @@ test("panel phone sheets list only existing actions and close before running the
   assert.equal(mounted.state.addSheetOpen, false);
   assert.equal(mounted.state.menuItem, null);
   assert.equal(mounted.state.pickedFile, null);
+});
+
+test("conversation drawer hides the self link but keeps links to other conversations", async () => {
+  const mounted = mount(DeliverablePanel, { conversationId: 12, embedded: true });
+  await flush();
+  assert.equal(mounted.state.chatHref(item), null);
+  mounted.state.menuItem = item;
+  assert.deepEqual(mounted.state.menuGroups[0].map((action: any) => action.label), ["preview", "download", "clone…"]);
+  assert.equal(mounted.state.chatHref({ ...item, conversationId: 13 }), "http://localhost:26600/chat/13");
+  mounted.unmount();
 });

@@ -8,7 +8,9 @@ import {
   listDeliverables,
 } from "@/addons/deliverables/api/client";
 import type { Deliverable } from "@/addons/deliverables/api/contracts";
+import { SHELL_ORIGIN } from "@/addons/deliverables/composables/embeddedSession";
 import { isCancelled, useSessionLifetime } from "@/addons/deliverables/composables/useSessionLifetime";
+import { conversationHref, conversationTarget, openConversation } from "@/addons/deliverables/utils/conversationLink";
 import { assertSafePreviewUrl, previewKind, shortFileType } from "@/addons/deliverables/utils/previewPolicy";
 import ActionSheet, { type SheetAction } from "./ActionSheet.vue";
 import PreviewDialog from "./PreviewDialog.vue";
@@ -180,8 +182,14 @@ const menuGroups = computed<SheetAction[][]>(() => {
   const main: SheetAction[] = [{ label: item.source === "app-link" ? t("openApp") : t("preview"), run: act(showPreview) }];
   if (item.source !== "app-link") main.push({ label: t("download"), run: act(download) });
   main.push({ label: `${t("clone")}…`, run: act(clone) });
+  const href = chatHref(item);
+  if (href) main.push({ label: t("openConversation", { id: item.conversationId }), run: act(() => openConversation(href)) });
   return [main, [{ label: t("remove"), danger: true, run: act(remove) }]];
 });
+
+// The /chat drawer scopes the panel to its own conversation: no self-link there.
+const chatHref = (item: Deliverable) => conversationHref(SHELL_ORIGIN, item.conversationId, props.conversationId);
+const linkTarget = conversationTarget();
 
 function rowMeta(item: Deliverable): string {
   return item.source === "app-link" ? t("appSource") : formatSize(item.size);
@@ -361,7 +369,10 @@ onBeforeUnmount(() => {
                     <span class="file-copy"><strong>{{ item.name }}</strong><small>{{ item.mimeType || "application/octet-stream" }}</small></span>
                   </button>
                 </td>
-                <td><span class="conversation-id">#{{ item.conversationId }}</span></td>
+                <td>
+                  <a v-if="chatHref(item)" class="conversation-id" :href="chatHref(item)!" :target="linkTarget" rel="noopener noreferrer" :title="t('openConversation', { id: item.conversationId })" @click.stop>#{{ item.conversationId }}</a>
+                  <span v-else class="conversation-id">#{{ item.conversationId }}</span>
+                </td>
                 <td><span class="source-badge" :data-source="item.source">{{ sourceLabel(item.source) }}</span></td>
                 <td>{{ item.source === "app-link" ? "" : formatSize(item.size) }}</td>
                 <td>{{ formatDate(item.createdAt) }}</td>
@@ -453,6 +464,8 @@ tbody tr { transition: background .14s var(--ease); } tbody tr:hover { backgroun
 .file-copy strong, .file-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-copy strong { color: var(--text-primary); font-size: 13px; }.file-copy small { color: var(--text-tertiary); font-size: 10px; }
 .conversation-id { font-family: var(--font-mono); color: var(--text-secondary); }
+a.conversation-id { color: var(--accent); text-decoration: none; }
+a.conversation-id:hover, a.conversation-id:focus-visible { text-decoration: underline; }
 .source-badge { display: inline-flex; padding: 4px 7px; border-radius: var(--r-full); color: var(--teal-700); background: var(--teal-50); font-size: 10px; font-weight: 700; white-space: nowrap; }
 .source-badge[data-source="agent"] { color: var(--indigo-600); background: #eef2ff; }.source-badge[data-source="app"] { color: var(--violet-600); background: #f5f3ff; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 3px; }

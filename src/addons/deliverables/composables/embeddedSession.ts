@@ -13,7 +13,7 @@ const runtimeConfig = (globalThis as typeof globalThis & {
   __NUCLEAGENT_DELIVERABLES_CONFIG__?: { shellUrl?: string };
 }).__NUCLEAGENT_DELIVERABLES_CONFIG__;
 
-const SHELL_ORIGIN = new URL(
+export const SHELL_ORIGIN = new URL(
   outerAware(runtimeConfig?.shellUrl?.trim() || import.meta.env.VITE_SHELL_URL || "http://localhost:26600"),
   window.location.origin,
 ).origin;
