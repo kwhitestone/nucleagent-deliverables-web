@@ -1,6 +1,13 @@
 export type DeliverableStatus = "pending" | "active" | "failed";
 export type DeliverableSource = "generated" | "upload" | "import" | "app-link";
 
+/** IM channel the conversation was born in (server-derived from Core state; T17). */
+export interface IMReference {
+  channelId: string;
+  channelType: 1 | 2;
+  agentUid: string;
+}
+
 export interface Deliverable {
   id: number;
   fileId: string;
@@ -15,6 +22,7 @@ export interface Deliverable {
   status: DeliverableStatus;
   source: DeliverableSource;
   appUrl?: string;
+  imReference?: IMReference;
   createdAt: string;
   updatedAt: string;
 }

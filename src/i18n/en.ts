@@ -73,6 +73,7 @@ export default {
   uploadFailedStatus: "Upload failed ({status})",
   invalidConversation: "Enter a valid conversation ID",
   openConversation: "Open conversation #{id}",
+  openImConversation: "Open in IM #{id}",
   chooseValidFile: "Choose a valid file",
   emptyFile: "The file cannot be empty",
   uploadTooLarge: "The file exceeds the 100 MB limit",

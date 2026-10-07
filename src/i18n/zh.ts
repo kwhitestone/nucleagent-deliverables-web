@@ -73,6 +73,7 @@ export default {
   uploadFailedStatus: "上传失败 ({status})",
   invalidConversation: "请输入有效的对话 ID",
   openConversation: "打开对话 #{id}",
+  openImConversation: "在 IM 中打开 #{id}",
   chooseValidFile: "请选择有效文件",
   emptyFile: "文件不能为空",
   uploadTooLarge: "文件超过 100MB 上限",

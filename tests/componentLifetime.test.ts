@@ -826,6 +826,12 @@ test("panel phone sheets list only existing actions and close before running the
   assert.deepEqual(mounted.state.menuGroups[0].map((action: any) => action.label), ["openApp", "clone…", "openConversation"]);
   assert.equal(mounted.state.rowMeta(mounted.state.menuItem), "appSource");
   assert.equal(mounted.state.rowMeta(item), "7 B");
+  // T17: an IM row's sheet entry goes straight to its IM channel.
+  opened.length = 0;
+  mounted.state.menuItem = { ...item, imReference: { channelId: "g-abc", channelType: 2, agentUid: "37" } };
+  assert.equal(mounted.state.menuGroups[0][3].label, "openImConversation");
+  mounted.state.menuGroups[0][3].run();
+  assert.deepEqual(opened, [["http://localhost:26600/im?imChannelId=g-abc&imChannelType=2&imAgentUid=37", "_blank", "noopener,noreferrer"]]);
 
   fixtures.api.listDeliverables = () => new Promise(() => {});
   mounted.state.setKind("image");
@@ -845,5 +851,7 @@ test("conversation drawer hides the self link but keeps links to other conversat
   mounted.state.menuItem = item;
   assert.deepEqual(mounted.state.menuGroups[0].map((action: any) => action.label), ["preview", "download", "clone…"]);
   assert.equal(mounted.state.chatHref({ ...item, conversationId: 13 }), "http://localhost:26600/chat/13");
+  // T17: the drawer's own IM conversation stays plain text too.
+  assert.equal(mounted.state.chatHref({ ...item, imReference: { channelId: "g-abc", channelType: 2, agentUid: "37" } }), null);
   mounted.unmount();
 });

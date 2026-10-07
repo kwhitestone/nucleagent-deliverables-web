@@ -10,7 +10,7 @@ import {
 import type { Deliverable } from "@/addons/deliverables/api/contracts";
 import { SHELL_ORIGIN } from "@/addons/deliverables/composables/embeddedSession";
 import { isCancelled, useSessionLifetime } from "@/addons/deliverables/composables/useSessionLifetime";
-import { conversationHref, conversationTarget, openConversation } from "@/addons/deliverables/utils/conversationLink";
+import { conversationHref, conversationTarget, openConversation, validIMReference } from "@/addons/deliverables/utils/conversationLink";
 import { assertSafePreviewUrl, previewKind, shortFileType } from "@/addons/deliverables/utils/previewPolicy";
 import ActionSheet, { type SheetAction } from "./ActionSheet.vue";
 import PreviewDialog from "./PreviewDialog.vue";
@@ -183,12 +183,15 @@ const menuGroups = computed<SheetAction[][]>(() => {
   if (item.source !== "app-link") main.push({ label: t("download"), run: act(download) });
   main.push({ label: `${t("clone")}…`, run: act(clone) });
   const href = chatHref(item);
-  if (href) main.push({ label: t("openConversation", { id: item.conversationId }), run: act(() => openConversation(href)) });
+  if (href) main.push({ label: linkLabel(item), run: act(() => openConversation(href)) });
   return [main, [{ label: t("remove"), danger: true, run: act(remove) }]];
 });
 
 // The /chat drawer scopes the panel to its own conversation: no self-link there.
-const chatHref = (item: Deliverable) => conversationHref(SHELL_ORIGIN, item.conversationId, props.conversationId);
+// IM rows go straight to their IM channel, Agent rows to /chat/<id>.
+const chatHref = (item: Deliverable) => conversationHref(SHELL_ORIGIN, item, props.conversationId);
+const linkLabel = (item: Deliverable) =>
+  t(validIMReference(item.imReference) ? "openImConversation" : "openConversation", { id: item.conversationId });
 const linkTarget = conversationTarget();
 
 function rowMeta(item: Deliverable): string {
@@ -370,7 +373,7 @@ onBeforeUnmount(() => {
                   </button>
                 </td>
                 <td>
-                  <a v-if="chatHref(item)" class="conversation-id" :href="chatHref(item)!" :target="linkTarget" rel="noopener noreferrer" :title="t('openConversation', { id: item.conversationId })" @click.stop>#{{ item.conversationId }}</a>
+                  <a v-if="chatHref(item)" class="conversation-id" :href="chatHref(item)!" :target="linkTarget" rel="noopener noreferrer" :title="linkLabel(item)" @click.stop>#{{ item.conversationId }}</a>
                   <span v-else class="conversation-id">#{{ item.conversationId }}</span>
                 </td>
                 <td><span class="source-badge" :data-source="item.source">{{ sourceLabel(item.source) }}</span></td>

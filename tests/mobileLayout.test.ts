@@ -128,7 +128,7 @@ for (const width of [393, 360, 320]) {
 
         // ⑤ row menu
         await page.locator(".more-button").first().click();
-        assert.deepEqual(await page.locator(".sheet-row").allTextContents(), ["预览", "下载", "复制到对话…", "删除"]);
+        assert.deepEqual(await page.locator(".sheet-row").allTextContents(), ["预览", "下载", "复制到对话…", "打开对话 #128", "删除"]);
         assert.equal(await page.locator(".sheet-group").count(), 2);
         await check("row menu");
         await shot(page, "row-menu", width, scheme);
@@ -199,6 +199,38 @@ for (const width of [1024, 1280]) test(`desktop at ${width}px keeps the table, t
     assert.equal(await page.locator(".preview-bar").isVisible(), false);
     assert.ok(await page.locator(".preview-actions .button").isVisible());
     await shot(page, "desktop", width, "light");
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+});
+
+// UNI-T17: at 390px an IM row's "⋯" goes straight to its IM group; an Agent row keeps /chat.
+test("phone 390px: IM row opens the IM group directly, Agent row keeps /chat", { skip }, async () => {
+  const imItems = [{ ...items[0], id: 9, conversationId: 463, imReference: { channelId: "g-d3200795", channelType: 2, agentUid: "37" } }, items[1]];
+  const { context, page, errors } = await open(390);
+  try {
+    await context.unroute("**/api/v1/deliverables?**");
+    await context.route("**/api/v1/deliverables?**", (route: any) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ code: 0, message: "ok", data: { items: imItems, hasMore: false, nextBeforeId: 0 } }) }));
+    await page.evaluate(() => {
+      (window as any).__opened = [];
+      window.open = ((...args: unknown[]) => { (window as any).__opened.push(args); return null; }) as typeof window.open;
+      window.dispatchEvent(new Event("focus"));
+    });
+    await page.waitForFunction(() => document.querySelectorAll(".mobile-row").length === 2);
+    await page.locator(".more-button").first().click();
+    assert.deepEqual(await page.locator(".sheet-row").allTextContents(), ["预览", "下载", "复制到对话…", "在 IM 中打开 #463", "删除"]);
+    const result = await audit(page);
+    assert.ok(result.overflow <= 0 && result.small.length === 0, JSON.stringify(result));
+    await shot(page, "im-row-menu", 390, "light");
+    await page.locator(".sheet-row").nth(3).click();
+    await page.locator(".more-button").nth(1).click();
+    await page.locator(".sheet-row").nth(3).click();
+    const opened = await page.evaluate(() => (window as any).__opened);
+    assert.deepEqual(opened, [
+      ["http://localhost:26600/im?imChannelId=g-d3200795&imChannelType=2&imAgentUid=37", "_blank", "noopener,noreferrer"],
+      ["http://localhost:26600/chat/128", "_blank", "noopener,noreferrer"],
+    ]);
     assert.deepEqual(errors, []);
   } finally {
     await context.close();
