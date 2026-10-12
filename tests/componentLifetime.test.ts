@@ -511,6 +511,26 @@ test("app-link preview opens only its validated current URL", async () => {
   assert.equal(unsafe.state.error, "previewFailed");
 });
 
+test("preview download saves a freshly signed file; failures stay in the dialog and open nothing", async (t) => {
+  const { saved, fetched } = captureSaves(t);
+  const mounted = await preview({ name: "photo.jpg", mimeType: "image/jpeg" });
+  let signs = 0;
+  fixtures.api.getDownloadUrl = async () => { signs += 1; return signedUrl; };
+  await mounted.state.openExternal();
+  assert.deepEqual(saved, [{ href: "blob:fixture", download: "photo.jpg" }]);
+  assert.deepEqual([signs, fetched.length, opened.length], [1, 1, 0]);
+  globalThis.fetch = async () => new Response("<Error/>", { status: 403 });
+  await mounted.state.openExternal();
+  assert.deepEqual([saved.length, opened.length], [1, 0]);
+  assert.equal(mounted.state.downloadError, "downloadFailed");
+  assert.equal(mounted.state.error, "");
+  fixtures.api.getDownloadUrl = async () => { throw new Error(`Failed: ${signedUrl}`); };
+  await mounted.state.openExternal();
+  assert.equal(mounted.state.downloadError, "downloadFailed");
+  mounted.state.close();
+  assert.equal(mounted.state.downloadError, "");
+});
+
 test("late direct preview body rejection after unmount is silent and aborted", async () => {
   const body = deferred<Blob>();
   let signal: AbortSignal | undefined;
@@ -528,11 +548,30 @@ test("late direct preview body rejection after unmount is silent and aborted", a
   assert.equal(mounted.state.loading, false);
 });
 
-test("current panel actions preserve download, clone and delete behavior", async () => {
+// Captures the helper's save step: object URL + anchor[download], never window.open.
+function captureSaves(t: TestContext) {
+  const saved: Array<{ href: string; download: string }> = [];
+  const fetched: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => { fetched.push({ url: String(url), init }); return new Response("private bytes"); };
+  t.mock.method(URL, "createObjectURL", () => "blob:fixture");
+  t.mock.method(URL, "revokeObjectURL", () => undefined);
+  t.mock.timers.enable({ apis: ["setTimeout"] }); // the helper's delayed revoke must not hold the test process
+  t.mock.method(documentFixture, "createElement", () => {
+    const anchor = { href: "", download: "", rel: "", click() { saved.push({ href: anchor.href, download: anchor.download }); }, remove() {} };
+    return anchor;
+  });
+  Object.assign(documentFixture, { body: { append: () => undefined } });
+  return { saved, fetched };
+}
+
+test("current panel actions preserve download, clone and delete behavior", async (t) => {
+  const { saved, fetched } = captureSaves(t);
   const mounted = mount(DeliverablePanel, {});
   await flush();
   await mounted.state.download(item);
-  assert.deepEqual(opened, [[signedUrl, "_blank", "noopener,noreferrer"]]);
+  assert.deepEqual(opened, []);
+  assert.deepEqual(saved, [{ href: "blob:fixture", download: "private.txt" }]);
+  assert.deepEqual([fetched[0].url, fetched[0].init?.credentials], [signedUrl, "omit"]);
   await mounted.state.clone(item);
   assert.deepEqual(mounted.state.items.map((value: any) => value.id), [8, 7]);
   assert.equal(mounted.state.notice, "copied");
