@@ -6,6 +6,7 @@ import { useI18n } from "vue-i18n";
 import { getDownloadUrl } from "@/addons/deliverables/api/client";
 import type { Deliverable } from "@/addons/deliverables/api/contracts";
 import { isCancelled, useSessionLifetime, type SessionOperation } from "@/addons/deliverables/composables/useSessionLifetime";
+import { saveAsFile } from "@/addons/deliverables/utils/download";
 import { renderSanitizedDocx } from "@/addons/deliverables/utils/docxPreviewPolicy";
 import { assertSafePreviewUrl, previewKind, type PreviewKind } from "@/addons/deliverables/utils/previewPolicy";
 import { shareOrCopy } from "@/addons/deliverables/utils/share";
@@ -24,12 +25,14 @@ const sheetRows = ref<string[][]>([]);
 const docxHost = ref<HTMLElement | null>(null);
 const active = ref(false);
 const shareNotice = ref("");
+const downloadError = ref("");
 const lifetime = useSessionLifetime(close);
 
 function reset(): void {
   lifetime.invalidate();
   active.value = false;
   shareNotice.value = "";
+  downloadError.value = "";
   loading.value = false;
   error.value = "";
   url.value = "";
@@ -168,8 +171,21 @@ function close(): void {
   emit("close");
 }
 
-function openExternal(): void {
-  if (url.value) window.open(url.value, "_blank", "noopener,noreferrer");
+async function openExternal(): Promise<void> {
+  const item = props.deliverable;
+  if (!url.value || !item) return;
+  if (item.source === "app-link") {
+    window.open(url.value, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const owner = lifetime.capture();
+  downloadError.value = "";
+  try {
+    // A fresh signed URL per save: the one shown in the preview may have expired.
+    await saveAsFile(owner.session.signal, item.id, () => getDownloadUrl(item.id), item.name, owner.signal);
+  } catch (reason) {
+    if (lifetime.isCurrent(owner) && !isCancelled(reason)) downloadError.value = t("downloadFailed");
+  }
 }
 
 // Phone bottom bar (board §15 ④): share sheet, or copy the link where unsupported.
@@ -194,6 +210,7 @@ onBeforeUnmount(reset);
           <div class="preview-title">
             <span>{{ deliverable.mimeType || "application/octet-stream" }}</span>
             <h2>{{ deliverable.name }}</h2>
+            <p v-if="downloadError" class="download-error" role="alert">{{ downloadError }}</p>
           </div>
           <div class="preview-actions">
             <button v-if="url" class="button secondary" type="button" @click="openExternal">
@@ -242,6 +259,7 @@ onBeforeUnmount(reset);
 .preview-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
 .preview-title { min-width: 0; }
 .preview-title span { color: var(--accent); font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; }
+.download-error { margin-top: 2px; color: var(--rose-500); font-size: 12px; font-weight: 700; }
 .preview-title h2 { overflow: hidden; margin-top: 2px; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .preview-actions { display: flex; flex: 0 0 auto; gap: 9px; }
 .button, .icon-button { min-height: 36px; border: 1px solid transparent; border-radius: var(--r-md); font-weight: 700; cursor: pointer; }

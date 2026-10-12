@@ -11,6 +11,7 @@ import type { Deliverable } from "@/addons/deliverables/api/contracts";
 import { SHELL_ORIGIN } from "@/addons/deliverables/composables/embeddedSession";
 import { isCancelled, useSessionLifetime } from "@/addons/deliverables/composables/useSessionLifetime";
 import { conversationHref, conversationTarget, openConversation, validIMReference } from "@/addons/deliverables/utils/conversationLink";
+import { saveAsFile } from "@/addons/deliverables/utils/download";
 import { assertSafePreviewUrl, previewKind, shortFileType } from "@/addons/deliverables/utils/previewPolicy";
 import ActionSheet, { type SheetAction } from "./ActionSheet.vue";
 import PreviewDialog from "./PreviewDialog.vue";
@@ -205,10 +206,11 @@ function showPreview(item: Deliverable): void {
 async function download(item: Deliverable): Promise<void> {
   const owner = lifetime.capture();
   try {
-    const target = item.source === "app-link" ? assertSafePreviewUrl(item.appUrl || "") : await getDownloadUrl(item.id);
-    lifetime.assertCurrent(owner);
-    if (!target) throw new Error(t("downloadUnavailable"));
-    window.open(target, "_blank", "noopener,noreferrer");
+    if (item.source === "app-link") {
+      window.open(assertSafePreviewUrl(item.appUrl || ""), "_blank", "noopener,noreferrer");
+      return;
+    }
+    await saveAsFile(owner.session.signal, item.id, () => getDownloadUrl(item.id), item.name, owner.signal);
   } catch (reason) {
     if (lifetime.isCurrent(owner) && !isCancelled(reason)) error.value = t("downloadFailed");
   }
