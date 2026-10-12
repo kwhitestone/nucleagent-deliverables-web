@@ -182,7 +182,7 @@ async function openExternal(): Promise<void> {
   downloadError.value = "";
   try {
     // A fresh signed URL per save: the one shown in the preview may have expired.
-    await saveAsFile(item.id, () => getDownloadUrl(item.id), item.name, owner.signal);
+    await saveAsFile(owner.session.signal, item.id, () => getDownloadUrl(item.id), item.name, owner.signal);
   } catch (reason) {
     if (lifetime.isCurrent(owner) && !isCancelled(reason)) downloadError.value = t("downloadFailed");
   }

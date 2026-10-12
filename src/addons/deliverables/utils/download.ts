@@ -9,7 +9,9 @@ import { assertSafePreviewUrl } from "@/addons/deliverables/utils/previewPolicy"
  */
 export const REVOKE_AFTER_MS = 40_000; // the browser resolves the blob when the download starts; revoke well after
 
-const running = new Map<number, Promise<void>>();
+type Entry = { controller: AbortController; refs: number; done: Promise<void> };
+// Request scope (opaque session signal) -> item -> one shared save. A new session never joins an old one.
+const entries = new WeakMap<AbortSignal, Map<number, Entry>>();
 
 /** Last path segment only, without characters that are invalid in file names. */
 export function downloadFileName(name: string): string {
@@ -19,13 +21,38 @@ export function downloadFileName(name: string): string {
   return cleaned || "download";
 }
 
-/** One save per key at a time: repeated clicks join the running one. */
-export function saveAsFile(key: number, resolveUrl: () => Promise<string>, name: string, signal: AbortSignal): Promise<void> {
-  const current = running.get(key);
-  if (current) return current;
-  const run = save(resolveUrl, name, signal).finally(() => running.delete(key));
-  running.set(key, run);
-  return run;
+/**
+ * One save per (scope, key) at a time: repeated clicks join the running one. Each caller
+ * holds a reference; a caller leaving (its signal aborts) rejects only that caller, and the
+ * shared fetch is aborted only when the last caller has left or the scope itself ends.
+ */
+export function saveAsFile(scope: AbortSignal, key: number, resolveUrl: () => Promise<string>, name: string, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  let items = entries.get(scope);
+  if (!items) entries.set(scope, (items = new Map()));
+  const scoped = items;
+  let entry = scoped.get(key);
+  if (!entry) {
+    const controller = new AbortController();
+    const created: Entry = { controller, refs: 0, done: Promise.resolve() };
+    created.done = save(resolveUrl, name, AbortSignal.any([scope, controller.signal]))
+      .finally(() => { if (scoped.get(key) === created) scoped.delete(key); });
+    scoped.set(key, (entry = created));
+  }
+  const joined = entry;
+  joined.refs += 1;
+  return new Promise<void>((resolve, reject) => {
+    const leave = () => {
+      joined.refs -= 1;
+      if (joined.refs === 0) {
+        if (scoped.get(key) === joined) scoped.delete(key);
+        joined.controller.abort();
+      }
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", leave, { once: true });
+    joined.done.then(resolve, reject).finally(() => signal.removeEventListener("abort", leave));
+  });
 }
 
 async function save(resolveUrl: () => Promise<string>, name: string, signal: AbortSignal): Promise<void> {

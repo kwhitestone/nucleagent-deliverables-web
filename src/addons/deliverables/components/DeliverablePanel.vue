@@ -210,7 +210,7 @@ async function download(item: Deliverable): Promise<void> {
       window.open(assertSafePreviewUrl(item.appUrl || ""), "_blank", "noopener,noreferrer");
       return;
     }
-    await saveAsFile(item.id, () => getDownloadUrl(item.id), item.name, owner.signal);
+    await saveAsFile(owner.session.signal, item.id, () => getDownloadUrl(item.id), item.name, owner.signal);
   } catch (reason) {
     if (lifetime.isCurrent(owner) && !isCancelled(reason)) error.value = t("downloadFailed");
   }
