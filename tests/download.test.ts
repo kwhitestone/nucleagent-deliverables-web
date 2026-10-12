@@ -180,6 +180,18 @@ test("different sessions never share or cancel each other; a session ending abor
   assert.equal(anchors.length, 1);
 });
 
+test("the scope ending aborts its save even when the caller's own signal is still live", async () => {
+  const { release, signals } = gatedFetch();
+  const session = new AbortController();
+  const run = saveAsFile(session.signal, 18, async () => signedUrl, "a.jpg", new AbortController().signal);
+  await tick();
+  session.abort();
+  assert.equal(signals[0].aborted, true);
+  release();
+  await assert.rejects(run, { name: "AbortError" });
+  assert.equal(anchors.length, 0);
+});
+
 test("an already-aborted caller is refused without starting a fetch", async () => {
   const gone = new AbortController();
   gone.abort();
@@ -193,5 +205,46 @@ test("a failed shared save rejects every caller and the next click retries", asy
   for (const run of runs) await assert.rejects(run, /HTTP 500/);
   globalThis.fetch = async (url, init) => { calls.push({ url: String(url), init }); return new Response(new Uint8Array([9])); };
   await saveAsFile(scope, 15, async () => signedUrl, "a.jpg", new AbortController().signal);
+  assert.deepEqual([calls.length, anchors.length], [2, 1]);
+});
+
+test("a click right after the last caller left, while the URL is still resolving, starts a fresh save", async () => {
+  globalThis.fetch = async (url, init) => {
+    init?.signal?.throwIfAborted(); // like the real fetch: an aborted signal never reaches the network
+    calls.push({ url: String(url), init });
+    return new Response(new Uint8Array([1, 2, 3]));
+  };
+  let resolveFirst!: (url: string) => void;
+  const first = new AbortController();
+  const a = saveAsFile(scope, 16, () => new Promise<string>((resolve) => { resolveFirst = resolve; }), "a.jpg", first.signal);
+  first.abort();
+  const b = saveAsFile(scope, 16, async () => signedUrl, "a.jpg", new AbortController().signal);
+  resolveFirst(signedUrl);
+  await assert.rejects(a, { name: "AbortError" });
+  await b;
+  assert.deepEqual([calls.length, anchors.length], [1, 1]);
+});
+
+test("an abandoned save settling late never evicts the newer save of the same item", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  globalThis.fetch = (url, init) => {
+    calls.push({ url: String(url), init });
+    const signal = init!.signal!;
+    return new Promise((resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      void gate.then(() => resolve(new Response(new Uint8Array([1]))));
+    });
+  };
+  const first = new AbortController();
+  const a = saveAsFile(scope, 17, async () => signedUrl, "a.jpg", first.signal);
+  await tick();
+  first.abort();
+  const b = saveAsFile(scope, 17, async () => signedUrl, "a.jpg", new AbortController().signal);
+  await assert.rejects(a, { name: "AbortError" });
+  await tick(); // the abandoned save has fully settled; b's save is still in flight
+  const c = saveAsFile(scope, 17, async () => signedUrl, "a.jpg", new AbortController().signal);
+  release();
+  await Promise.all([b, c]);
   assert.deepEqual([calls.length, anchors.length], [2, 1]);
 });
