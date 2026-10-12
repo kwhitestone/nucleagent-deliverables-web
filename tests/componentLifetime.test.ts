@@ -105,7 +105,7 @@ async function upload(mode = "file") {
   });
   mounted.props.open = true;
   await flush();
-  mounted.state.conversationId = "12";
+  mounted.state.conversationIdInput = "12";
   mounted.state.selectedFile = new File(["private"], "private.txt", { type: "text/plain" });
   mounted.state.appName = "Private app";
   mounted.state.appUrl = "https://app.example.test/private";
@@ -281,7 +281,7 @@ test("closing and reopening upload ignores the old error and busy finalizer", as
   await flush();
   mounted.props.open = true;
   await flush();
-  mounted.state.conversationId = "12";
+  mounted.state.conversationIdInput = "12";
   mounted.state.selectedFile = new File(["new"], "new.txt");
   fixtures.api.createUpload = () => currentResult.promise;
   const current = mounted.state.submitFile();
@@ -372,7 +372,7 @@ test("current file upload completes once with captured inputs and clears the for
   const pending = mounted.state.submitFile();
   await mounted.state.submitFile();
   assert.equal(calls.length, 1);
-  mounted.state.conversationId = "99";
+  mounted.state.conversationIdInput = "99";
   mounted.state.selectedFile = new File(["replacement"], "replacement.txt");
   credential.resolve({ deliverable: item, upload: { uploadUrl: signedUrl } });
   await pending;
@@ -434,7 +434,7 @@ test("changing upload context retires the pending operation", async () => {
   await flush();
   result.resolve(item);
   await pending;
-  assert.equal(mounted.state.conversationId, "42");
+  assert.equal(mounted.state.conversationIdInput, "42");
   assert.equal(mounted.state.busy, false);
   assert.equal(mounted.saved.length, 0);
   assert.equal(mounted.closed.length, 0);
@@ -676,12 +676,12 @@ test("panel display helpers and upload validation remain usable", async () => {
   mounted.state.selectFile({ target: { files: [] } });
   await mounted.state.submitFile();
   assert.ok(mounted.state.error);
-  mounted.state.conversationId = "0";
+  mounted.state.conversationIdInput = "0";
   await mounted.state.submitLink();
   assert.equal(mounted.state.error, "invalidConversation");
   await mounted.state.submitImport();
   assert.equal(mounted.state.error, "invalidConversation");
-  mounted.state.conversationId = "12";
+  mounted.state.conversationIdInput = "12";
   mounted.state.appName = "";
   await mounted.state.submitLink();
   assert.equal(mounted.state.error, "appNameRequired");
@@ -775,7 +775,7 @@ test("phone upload waits for an owner, then starts on the next pick", async (t) 
   const mounted = await uploadWithFile({});
   assert.equal(calls, 0);
   assert.equal(mounted.state.selectedFile?.name, "private.txt");
-  mounted.state.conversationId = "12";
+  mounted.state.conversationIdInput = "12";
   mounted.state.selectFile({ target: { files: [new File(["next"], "next.txt")] } });
   await flush();
   assert.equal(calls, 1);

@@ -109,6 +109,7 @@ export function installShellBridge(): () => void {
   const channel = createRemoteChildChannel({
     appId: "deliverables",
     hostOrigin: SHELL_ORIGIN,
+    allowedHostOrigins: import.meta.env?.VITE_SHELL_ALLOWED_ORIGINS,
     parent: window.parent,
     messages: {
       toChild: ["auth", "locale"],
